@@ -25,15 +25,15 @@ cdef class TreeBase:
 
     cdef void allocate_data(self, n_nodes, n_features):
         self.centroids_arr = np.zeros((n_nodes, n_features),
-                                      dtype='c', order='C')
+                                      dtype=DTYPE, order='C')
 
     cdef void init_data_views(self):
         pass
         #self.centroids = self.centroids_arr
 
     cdef DTYPE_t* centroids(self, ITYPE_t i_node):
-        return <DTYPE_t*> np.PyArray_DATA(self.centroids_arr)
-
+        return (<DTYPE_t*> np.PyArray_DATA(self.centroids_arr)
+                + i_node * self.centroids_arr.shape[1])
 
 @cython.cdivision(True)
 cdef NodeData* init_node(_BinaryTree bt, ITYPE_t i_node,
@@ -86,17 +86,6 @@ cdef inline DTYPE_t min_rdist(_BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
     return dist_to_rdist(min_dist(bt, i_node, pt))
 
 
-cdef inline void minmax_dist(_BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt,
-                             DTYPE_t* dmin, DTYPE_t* dmax):
-    cdef ITYPE_t n_features = bt.data.shape[1]
-    cdef NodeData* info = bt.node_data(i_node)
-    cdef DTYPE_t* centroid = bt.centroids(i_node)
-    cdef DTYPE_t dist_pt = dist(pt, centroid, n_features)
-
-    dmin[0] = fmax(0, dist_pt - info.radius)
-    dmax[0] = dist_pt + info.radius
-
-
 cdef inline DTYPE_t min_dist_dual(_BinaryTree bt1, ITYPE_t i_node1,
                                   _BinaryTree bt2, ITYPE_t i_node2):
     cdef ITYPE_t n_features = bt1.data.shape[1]
@@ -114,3 +103,14 @@ cdef inline DTYPE_t min_rdist_dual(_BinaryTree bt1, ITYPE_t i_node1,
                                    _BinaryTree bt2, ITYPE_t i_node2):
     return dist_to_rdist(min_dist_dual(bt1, i_node1,
                                        bt2, i_node2))
+
+
+cdef inline void minmax_dist(_BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt,
+                             DTYPE_t* dmin, DTYPE_t* dmax):
+    cdef ITYPE_t n_features = bt.data.shape[1]
+    cdef NodeData* info = bt.node_data(i_node)
+    cdef DTYPE_t* centroid = bt.centroids(i_node)
+    cdef DTYPE_t dist_pt = dist(pt, centroid, n_features)
+
+    dmin[0] = fmax(0, dist_pt - info.radius)
+    dmax[0] = dist_pt + info.radius

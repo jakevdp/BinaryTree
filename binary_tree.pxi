@@ -31,7 +31,7 @@ cdef class _BinaryTree(TreeBase):
     cdef int n_splits
 
     cdef NodeData* node_data(self, ITYPE_t i_node):
-        return <NodeData*> np.PyArray_DATA(self.node_data_arr)
+        return <NodeData*> np.PyArray_DATA(self.node_data_arr) + i_node
 
     # Use cinit to initialize all arrays to empty: this prevents errors
     # in rare cases where __init__ is not called
@@ -414,8 +414,6 @@ cdef class _BinaryTree(TreeBase):
         cdef ITYPE_t* idx_array = (<ITYPE_t*> np.PyArray_DATA(self.idx_array)
                                    + idx_start)
         cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(self.data)
-        #cdef ITYPE_t* idx_array = (<ITYPE_t*> self.idx_array.data + idx_start)
-        #cdef DTYPE_t* data = <DTYPE_t*> self.data.data
 
         # initialize node data
         cdef NodeData* node_info = init_node(self, i_node, idx_start, idx_end)
