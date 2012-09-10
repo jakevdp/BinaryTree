@@ -1,4 +1,4 @@
 BinaryTree
 ==========
 
-A cython implementation of a binary search tree (Ball Tree &amp; KD Tree)
+A cython implementation of a binary search tree (Ball Tree and KD Tree)
