@@ -1,7 +1,7 @@
 ball_tree.c
 kd_tree.c
-ball_tree.so
-kd_tree.so
+distmetrics.c
+*.so
 *~
 
 *.py[co]

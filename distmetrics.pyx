@@ -48,7 +48,7 @@ cdef class DistanceMetric:
             D = self.cdist(X, Y)
         return np.asarray(D)        
 
-    cdef DTYPE_t[:, ::1] pdist(self, DTYPE_t[:, ::1]):
+    cdef DTYPE_t[:, ::1] pdist(self, DTYPE_t[:, ::1] X):
         cdef ITYPE_t nX = X.shape[0]
         cdef DTYPE_t[:, ::1] D = np.zeros((nX, nX),
                                           dtype=DTYPE, order='C')
