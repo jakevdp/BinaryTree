@@ -15,7 +15,7 @@ def newObj(obj):
 # This is a base class for tree-based N-point queries
 cdef class _BinaryTree(TreeBase):
     """Base class for KDTree and BallTree"""
-    cdef np.ndarray data
+    cdef readonly np.ndarray data
     cdef np.ndarray idx_array
     cdef np.ndarray node_data_arr
 

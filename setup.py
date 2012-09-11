@@ -20,3 +20,14 @@ for extension in ["ball_tree", "kd_tree"]:
           include_dirs=[numpy.get_include(),
                         os.path.join(numpy.get_include(), 'numpy')]
           )
+
+
+extension = "distmetrics"
+setup(cmdclass = {'build_ext': build_ext},
+      name=extension,
+      version='1.0',
+      ext_modules=[Extension(extension,
+                             [extension + ".pyx"])],
+      include_dirs=[numpy.get_include(),
+                    os.path.join(numpy.get_include(), 'numpy')]
+      )
