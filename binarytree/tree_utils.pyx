@@ -35,7 +35,7 @@ cdef class MaxHeap:
     cpdef ITYPE_t idx_largest(self):
         return self.idx[0]
 
-    cpdef insert(self, DTYPE_t val, ITYPE_t i_val):
+    cpdef push(self, DTYPE_t val, ITYPE_t i_val):
         cdef ITYPE_t i, ic1, ic2, i_tmp
         cdef DTYPE_t d_tmp
 
@@ -88,34 +88,47 @@ ctypedef fused DITYPE_t:
     ITYPE_t
     DTYPE_t
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
 cdef inline void swap(DITYPE_t[::1] arr, ITYPE_t i1, ITYPE_t i2):
     cdef DITYPE_t tmp = arr[i1]
     arr[i1] = arr[i2]
     arr[i2] = tmp
 
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
 cpdef sort_dist_idx(DTYPE_t[::1] dist, ITYPE_t[::1] idx):
-    cdef ITYPE_t pivot_idx, store_idx, i
+    if dist.shape[0] != idx.shape[0]:
+        raise ValueError('dist and ind should have matching shapes')
+    if dist.shape[0] > 1:
+        _sort_dist_idx(dist, idx, 0, dist.shape[0])
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef void _sort_dist_idx(DTYPE_t[::1] dist, ITYPE_t[::1] idx,
+                         ITYPE_t lower, ITYPE_t upper):
     cdef DTYPE_t pivot_val
-    cdef ITYPE_t k = dist.shape[0]
+    cdef ITYPE_t pivot_idx, store_idx, i
 
-    if k > 1:
-        # determine new pivot
-        pivot_idx = k / 2
-        pivot_val = dist[pivot_idx]
-        store_idx = 0
-                         
-        swap(dist, pivot_idx, k - 1)
-        swap(idx, pivot_idx, k - 1)
+    # determine new pivot
+    pivot_idx = (lower + upper) / 2
+    pivot_val = dist[pivot_idx]
+    store_idx = lower
+    swap(dist, pivot_idx, upper - 1)
+    swap(idx, pivot_idx, upper - 1)
+    for i in range(lower, upper - 1):
+        if dist[i] < pivot_val:
+            swap(dist, i, store_idx)
+            swap(idx, i, store_idx)
+            store_idx += 1
+    swap(dist, store_idx, upper - 1)
+    swap(idx, store_idx, upper - 1)
+    pivot_idx = store_idx
 
-        for i in range(k - 1):
-            if dist[i] < pivot_val:
-                swap(dist, i, store_idx)
-                swap(idx, i, store_idx)
-                store_idx += 1
-        swap(dist, store_idx, k - 1)
-        swap(idx, store_idx, k - 1)
-        pivot_idx = store_idx
-
-        # recursively sort each side of the pivot
-        sort_dist_idx(dist[:pivot_idx], idx[:pivot_idx])
-        sort_dist_idx(dist[pivot_idx + 1:], idx[pivot_idx + 1:])
+    # recursively sort each side of the pivot
+    if lower + 1 < pivot_idx:
+        _sort_dist_idx(dist, idx, lower, pivot_idx)
+    if pivot_idx + 2 < upper:
+        _sort_dist_idx(dist, idx, pivot_idx + 1, upper)
