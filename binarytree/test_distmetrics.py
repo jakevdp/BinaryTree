@@ -1,5 +1,5 @@
 import numpy as np
-from distmetrics import DistanceMetric
+from distmetrics import Distance
 from scipy.spatial.distance import cdist
 
 
@@ -9,7 +9,7 @@ METRICS = {'euclidean':{},
 
 
 def check_dist(X, Y, metric, kwargs):
-    D1 = DistanceMetric(metric, **kwargs).pairwise(X, Y)
+    D1 = Distance(metric, **kwargs).pairwise(X, Y)
     D2 = cdist(X, Y, metric, **kwargs)
 
 

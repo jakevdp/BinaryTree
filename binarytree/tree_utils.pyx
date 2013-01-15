@@ -1,8 +1,9 @@
 #!python
 cimport cython
 cimport numpy as np
-from distmetrics cimport DTYPE_t, ITYPE_t
-from distmetrics import DTYPE, ITYPE
+
+import numpy as np
+from typedefs import DTYPE, ITYPE
 
 ######################################################################
 # Max-heap for keeping track of neighbors
@@ -19,10 +20,16 @@ from distmetrics import DTYPE, ITYPE
 #
 
 cdef class MaxHeap:
-    cdef DTYPE_t[::1] val
-    cdef ITYPE_t[::1] idx
+    def __init__(self, size=1):
+        self.val = np.zeros(size, dtype=DTYPE) + np.inf
+        self.idx = np.zeros(size, dtype=ITYPE)
 
-    def __init__(self, val, idx):
+    def get_arrays(self, sort=False):
+        if sort:
+            sort_dist_idx(self.val, self.idx)
+        return np.asarray(self.val), np.asarray(self.idx)
+
+    cpdef wrap(self, DTYPE_t[::1] val, ITYPE_t[::1] idx):
         self.val = val
         self.idx = idx
 
@@ -84,10 +91,6 @@ cdef class MaxHeap:
 # sort_dist_idx :
 #  this is a recursive quicksort implementation which sorts `dist` and
 #  simultaneously performs the same swaps on `idx`.
-ctypedef fused DITYPE_t:
-    ITYPE_t
-    DTYPE_t
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cdef inline void swap(DITYPE_t[::1] arr, ITYPE_t i1, ITYPE_t i2):

@@ -3,14 +3,10 @@ from numpy.testing import assert_allclose
 from tree_utils import MaxHeap, sort_dist_idx, DTYPE, ITYPE
 
 def test_max_heap(N=50, k=10):
+    m = MaxHeap(k)
+
     d_in = np.random.random(N).astype(DTYPE)
     i_in = np.arange(N, dtype=ITYPE)
-
-    d_heap = np.zeros(k, dtype=DTYPE)
-    d_heap.fill(np.inf)
-    i_heap = np.arange(k, dtype=ITYPE)
-    m = MaxHeap(d_heap, i_heap)
-
     for d, i in zip(d_in, i_in):
         m.push(d, i)
 
@@ -18,9 +14,30 @@ def test_max_heap(N=50, k=10):
     d_in = d_in[ind]
     i_in = i_in[ind]
 
-    ind = np.argsort(d_heap)
-    d_heap = d_heap[ind]
-    i_heap = i_heap[ind]
+    d_heap, i_heap = m.get_arrays(sort=True)
+
+    assert_allclose(d_in[:k], d_heap)
+    assert_allclose(i_in[:k], i_heap)
+
+
+def test_max_heap_wrap(N=50, k=10):
+    # wrap existing arrays
+    m = MaxHeap()
+    d_heap = np.zeros(k, dtype=DTYPE) + np.inf
+    i_heap = np.zeros(k, dtype=ITYPE)
+    m.wrap(d_heap, i_heap)
+
+    d_in = np.random.random(N).astype(DTYPE)
+    i_in = np.arange(N, dtype=ITYPE)
+    for d, i in zip(d_in, i_in):
+        m.push(d, i)
+
+    ind = np.argsort(d_in)
+    d_in = d_in[ind]
+    i_in = i_in[ind]
+
+    # in-place sort: d_heap and i_heap should end up sorted
+    tmp1, tmp2 = m.get_arrays(sort=True)
 
     assert_allclose(d_in[:k], d_heap)
     assert_allclose(i_in[:k], i_heap)
