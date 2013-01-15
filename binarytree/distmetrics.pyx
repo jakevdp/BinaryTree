@@ -9,15 +9,15 @@ cimport cython
 from libc.math cimport sqrt, pow, fabs
 
 DTYPE = np.float64
-ctypedef np.float64_t DTYPE_t
+#ctypedef np.float64_t DTYPE_t
 
 # warning: there will be problems if ITYPE
 #  is switched to an unsigned type!
 ITYPE = np.intp
-ctypedef np.intp_t ITYPE_t
+#ctypedef np.intp_t ITYPE_t
 
 
-cdef class DistanceMetric:
+cdef class _DistanceMetric:
     cdef DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
                       DTYPE_t[:, ::1] X2, ITYPE_t i2):
         return 0.0
@@ -72,7 +72,7 @@ cdef class DistanceMetric:
         return D
 
 
-cdef class EuclideanDistance(DistanceMetric):
+cdef class EuclideanDistance(_DistanceMetric):
     cdef DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
                       DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
@@ -83,9 +83,17 @@ cdef class EuclideanDistance(DistanceMetric):
         return sqrt(d)
 
 
-cdef class MinkowskiDistance(DistanceMetric):
-    cdef DTYPE_t p
+cdef class ManhattanDistance(_DistanceMetric):
+    cdef DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                      DTYPE_t[:, ::1] X2, ITYPE_t i2):
+        cdef ITYPE_t n_features = X1.shape[1]
+        cdef DTYPE_t tmp, d=0
+        for j in range(n_features):
+            d += fabs(X1[i1, j] - X2[i2, j])
+        return d
 
+
+cdef class MinkowskiDistance(_DistanceMetric):
     def __init__(self, p=2):
         if p <= 0:
             raise ValueError("p must be positive")
@@ -99,3 +107,15 @@ cdef class MinkowskiDistance(DistanceMetric):
         for j in range(n_features):
             d += pow(fabs(X1[i1, j] - X2[i2, j]), self.p)
         return pow(d, 1. / self.p)
+
+
+def DistanceMetric(metric, **kwargs):
+    if metric in ['euclidean', 'l2']:
+        return EuclideanDistance(**kwargs)
+    elif metric in ['manhattan', 'l1']:
+        return ManhattanDistance(**kwargs)
+    elif metric == 'minkowski':
+        return MinkowskiDistance(**kwargs)
+    else:
+        raise ValueError("Unrecognized metric '%s'" % str(metric))
+    
