@@ -1,6 +1,7 @@
 import numpy as np
-from numpy.testing import assert_allclose
-from tree_utils import MaxHeap, sort_dist_idx, DTYPE, ITYPE
+from numpy.testing import assert_allclose, assert_
+from tree_utils import MaxHeap, sort_dist_idx, find_split_dim,\
+    partition_indices, DTYPE, ITYPE
 
 def test_max_heap(N=50, k=10):
     m = MaxHeap(k)
@@ -58,3 +59,50 @@ def test_sort_dist_idx(N=201):
 
     assert_allclose(dist, dist2)
     assert_allclose(ind, ind2)
+
+
+def test_find_split_dim():
+    # check for several different random seeds
+    for i in range(5):
+        np.random.seed(i)
+        data = np.random.random((50, 5)).astype(DTYPE)
+        indices = np.arange(50, dtype=ITYPE)
+        np.random.shuffle(indices)
+
+        idx_start = 10
+        idx_end = 40
+
+        i_split = find_split_dim(data, indices, idx_start, idx_end)
+        i_split_2 = np.argmax(np.max(data[indices[idx_start:idx_end]], 0) -
+                              np.min(data[indices[idx_start:idx_end]], 0))
+
+        assert_(i_split == i_split_2)
+
+
+def test_partition_indices():
+    # check for several different random seeds
+    for i in range(5):
+        np.random.seed(i)
+
+        data = np.random.random((50, 5)).astype(DTYPE)
+        indices = np.arange(50, dtype=ITYPE)
+        np.random.shuffle(indices)
+
+        split_dim = 2
+        split_index = 25
+        idx_start = 10
+        idx_end = 40
+
+        partition_indices(data, indices, split_dim,
+                          split_index, idx_start, idx_end)
+    
+        assert_(np.all(data[indices[idx_start:split_index], split_dim]
+                       <= data[indices[split_index], split_dim]) and
+                np.all(data[indices[split_index], split_dim]
+                       <= data[indices[split_index:idx_end], split_dim]))
+    
+
+
+if __name__ == '__main__':
+    import nose
+    nose.runmodule()

@@ -20,3 +20,7 @@ def test_pdist():
     for (metric, kwargs) in METRICS.iteritems():
         yield check_dist, X, Y, metric, kwargs
         yield check_dist, X, X, metric, kwargs
+
+if __name__ == '__main__':
+    import nose
+    nose.runmodule()

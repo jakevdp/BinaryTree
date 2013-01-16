@@ -2,6 +2,8 @@
 cimport cython
 cimport numpy as np
 
+from libc.math cimport fmax, fmin, fabs
+
 import numpy as np
 from typedefs import DTYPE, ITYPE
 
@@ -135,3 +137,72 @@ cdef void _sort_dist_idx(DTYPE_t[::1] dist, ITYPE_t[::1] idx,
         _sort_dist_idx(dist, idx, lower, pivot_idx)
     if pivot_idx + 2 < upper:
         _sort_dist_idx(dist, idx, pivot_idx + 1, upper)
+
+
+cpdef ITYPE_t find_split_dim(DTYPE_t[:, ::1] data,
+                             ITYPE_t[::1] indices,
+                             ITYPE_t idx_start, ITYPE_t idx_end):
+    # this computes the equivalent of the following:
+    # j_max = np.argmax(np.max(data[indices[idx_start:idx_end]], 0) -
+    #                   np.min(data[indices[idx_start:idx_end]], 0))
+    cdef DTYPE_t min_val, max_val, val, spread, max_spread
+    cdef ITYPE_t i, j, j_max
+
+    if data.shape[0] != indices.shape[0]:
+        raise ValueError('data and indices sizes do not match')
+
+    j_max = 0
+    max_spread = 0
+
+    for j in range(data.shape[1]):
+        min_val = max_val = data[indices[idx_start], j]
+        for i in range(idx_start, idx_end):
+            val = data[indices[i], j]
+            max_val = fmax(max_val, val)
+            min_val = fmin(min_val, val)
+        spread = max_val - min_val
+        if spread > max_spread:
+            max_spread = spread
+            j_max = j
+    return j_max
+
+
+cpdef ITYPE_t partition_indices(DTYPE_t[:, ::1] data,
+                                ITYPE_t[::1] indices,
+                                ITYPE_t split_dim,
+                                ITYPE_t split_index,
+                                ITYPE_t idx_start,
+                                ITYPE_t idx_end):
+    # partition_indices will modify in-place indices[idx_start:idx_end]
+    # Upon return (assuming numpy-style slicing)
+    #   np.all(data[indices[idx_start:split_index], split_dim]
+    #          <= data[indices[split_index], split_dim])
+    # and
+    #   np.all(data[indices[split_index], split_dim]
+    #          <= data[indices[split_index:idx_end], split_dim])
+    # will hold.  The algorithm amounts to a partial quicksort.
+    cdef ITYPE_t left, right, midindex, i
+    cdef DTYPE_t d1, d2
+    left = idx_start
+    right = idx_end - 1
+
+    if data.shape[0] != indices.shape[0]:
+        raise ValueError('data and indices sizes do not match')
+
+    while True:
+        midindex = left
+        for i in range(left, right):
+            d1 = data[indices[i], split_dim]
+            d2 = data[indices[right], split_dim]
+            if d1 < d2:
+                swap(indices, i, midindex)
+                midindex += 1
+        swap(indices, midindex, right)
+        if midindex == split_index:
+            break
+        elif midindex < split_index:
+            left = midindex + 1
+        else:
+            right = midindex - 1
+
+    return 0
