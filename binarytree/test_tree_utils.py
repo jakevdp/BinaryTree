@@ -94,7 +94,7 @@ def test_partition_indices():
         idx_end = 40
 
         partition_indices(data, indices, split_dim,
-                          split_index, idx_start, idx_end)
+                          idx_start, split_index, idx_end)
     
         assert_(np.all(data[indices[idx_start:split_index], split_dim]
                        <= data[indices[split_index], split_dim]) and

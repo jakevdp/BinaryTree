@@ -92,7 +92,11 @@ cdef class MaxHeap:
 ######################################################################
 # sort_dist_idx :
 #  this is a recursive quicksort implementation which sorts `dist` and
-#  simultaneously performs the same swaps on `idx`.
+#  simultaneously performs the same swaps on `idx`.  The result is
+#  identical to
+#    i = np.argsort(dist)
+#    dist = dist[i]
+#    idx = idx[i]
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cdef inline void swap(DITYPE_t[::1] arr, ITYPE_t i1, ITYPE_t i2):
@@ -110,6 +114,7 @@ cpdef sort_dist_idx(DTYPE_t[::1] dist, ITYPE_t[::1] idx):
         _sort_dist_idx(dist, idx, 0, dist.shape[0])
 
 
+@cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cdef void _sort_dist_idx(DTYPE_t[::1] dist, ITYPE_t[::1] idx,
@@ -139,12 +144,16 @@ cdef void _sort_dist_idx(DTYPE_t[::1] dist, ITYPE_t[::1] idx,
         _sort_dist_idx(dist, idx, pivot_idx + 1, upper)
 
 
+######################################################################
+# find_split_dim:
+#  this computes the equivalent of the following:
+#  j_max = np.argmax(np.max(data[indices[idx_start:idx_end]], 0) -
+#                    np.min(data[indices[idx_start:idx_end]], 0))
+@cython.boundscheck(False)
+@cython.wraparound(False)
 cpdef ITYPE_t find_split_dim(DTYPE_t[:, ::1] data,
                              ITYPE_t[::1] indices,
                              ITYPE_t idx_start, ITYPE_t idx_end):
-    # this computes the equivalent of the following:
-    # j_max = np.argmax(np.max(data[indices[idx_start:idx_end]], 0) -
-    #                   np.min(data[indices[idx_start:idx_end]], 0))
     cdef DTYPE_t min_val, max_val, val, spread, max_spread
     cdef ITYPE_t i, j, j_max
 
@@ -167,20 +176,25 @@ cpdef ITYPE_t find_split_dim(DTYPE_t[:, ::1] data,
     return j_max
 
 
+######################################################################
+# partition_indices:
+#  in-place modification of the sub-array indices[idx_start:idx_end]
+#  Such that upon return (assuming numpy-style fancy indexing)
+#    np.all(data[indices[idx_start:split_index], split_dim]
+#           <= data[indices[split_index], split_dim])
+#  and
+#    np.all(data[indices[split_index], split_dim]
+#           <= data[indices[split_index:idx_end], split_dim])
+#  will hold.  The algorithm amounts to a partial quicksort.
+#  An integer is returned to be compatible with cpdef
+@cython.boundscheck(False)
+@cython.wraparound(False)
 cpdef ITYPE_t partition_indices(DTYPE_t[:, ::1] data,
                                 ITYPE_t[::1] indices,
                                 ITYPE_t split_dim,
-                                ITYPE_t split_index,
                                 ITYPE_t idx_start,
+                                ITYPE_t split_index,
                                 ITYPE_t idx_end):
-    # partition_indices will modify in-place indices[idx_start:idx_end]
-    # Upon return (assuming numpy-style slicing)
-    #   np.all(data[indices[idx_start:split_index], split_dim]
-    #          <= data[indices[split_index], split_dim])
-    # and
-    #   np.all(data[indices[split_index], split_dim]
-    #          <= data[indices[split_index:idx_end], split_dim])
-    # will hold.  The algorithm amounts to a partial quicksort.
     cdef ITYPE_t left, right, midindex, i
     cdef DTYPE_t d1, d2
     left = idx_start
@@ -188,6 +202,9 @@ cpdef ITYPE_t partition_indices(DTYPE_t[:, ::1] data,
 
     if data.shape[0] != indices.shape[0]:
         raise ValueError('data and indices sizes do not match')
+
+    if ((split_index < idx_start) or (split_index >= idx_end)):
+        raise ValueError("split index out of range")
 
     while True:
         midindex = left

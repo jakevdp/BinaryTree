@@ -18,6 +18,6 @@ cpdef ITYPE_t find_split_dim(DTYPE_t[:, ::1] data,
 cpdef ITYPE_t partition_indices(DTYPE_t[:, ::1] data,
                                 ITYPE_t[::1] indices,
                                 ITYPE_t split_dim,
-                                ITYPE_t split_index,
                                 ITYPE_t idx_start,
+                                ITYPE_t split_index,
                                 ITYPE_t idx_end)
