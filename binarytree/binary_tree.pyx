@@ -1,20 +1,25 @@
 #!python
-"""Binary Tree
-
+#cython: boundscheck=False
+#cython: wraparound=False
+#cython: cdivision=True
+"""
+Binary Tree
+===========
 This is the Abstract Base Class for the Ball Tree and KD Tree
 """
+import warnings
 import numpy as np
 from sklearn.utils import array2d
 
 from libc.math cimport fmax, fmin, fabs
-
 cimport numpy as np
 cimport cython
 
 from distmetrics cimport DistanceMetric
 from distmetrics import Distance
 
-from tree_utils cimport MaxHeap, partition_indices, find_split_dim
+from tree_utils cimport\
+    MaxHeap, partition_indices, find_split_dim, sort_dist_idx
 
 #####################################################################
 # global types and variables
@@ -83,7 +88,7 @@ cdef class _BinaryTree:
         self.idx_array = np.arange(data.shape[0], dtype=ITYPE)
         self.node_data_arr = np.zeros(data.shape[0], dtype=NodeData)
         self.leaf_size = leaf_size
-        self.dm = Distance(metric, **kwargs)
+        self.dm = Distance(metric, p=p, **kwargs)
         self.heap = MaxHeap()
 
         # validate data
@@ -115,17 +120,14 @@ cdef class _BinaryTree:
         self.n_nodes = (2 ** self.n_levels) - 1
 
     def get_arrays(self):
-        return map(np.asarray,
-                   (self.data, self.idx_array, self.node_data_arr))
+        return map(np.asarray, (self.data, self.idx_array, self.node_data_arr))
 
-    def get_stats(self):
+    def get_tree_stats(self):
         return (self.n_trims, self.n_leaves, self.n_splits)
 
     @cython.cdivision(True)
     cdef void _recursive_build(self, ITYPE_t i_node,
                                ITYPE_t idx_start, ITYPE_t idx_end):
-        print idx_start, idx_end
-
         cdef ITYPE_t imax
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef ITYPE_t n_points = idx_end - idx_start
@@ -140,7 +142,6 @@ cdef class _BinaryTree:
                 # this shouldn't happen if our memory allocation is correct
                 # we'll proactively prevent memory errors, but raise a warning
                 # saying we're doing so.
-                import warnings
                 warnings.warn("Internal: memory layout is flawed: "
                               "not enough nodes allocated")
 
@@ -148,7 +149,6 @@ cdef class _BinaryTree:
             # this shouldn't happen if our memory allocation is correct
             # we'll proactively prevent memory errors, but raise a warning
             # saying we're doing so.
-            import warnings
             warnings.warn("Internal: memory layout is flawed: "
                           "too many nodes allocated")
             self.node_data_arr[i_node].is_leaf = 1
@@ -208,7 +208,7 @@ cdef class _BinaryTree:
         """
         X = array2d(X, dtype=DTYPE, order='C')
 
-        if X.shape[-1] != n_features:
+        if X.shape[-1] != self.data.shape[1]:
             raise ValueError("query data dimension must "
                              "match training data dimension")
 
@@ -218,63 +218,89 @@ cdef class _BinaryTree:
 
         # flatten X, and save original shape information
         orig_shape = X.shape
-        X = X.reshape((-1, n_features))
-
-        cdef ITYPE_t n_queries = X.shape[0]
-        cdef ITYPE_t n_neighbors = k
-        cdef ITYPE_t n_features = self.data.shape[1]
+        X = X.reshape((-1, self.data.shape[1]))
 
         # allocate distances and indices for return
-        distances = np.zeros((X.shape[0], n_neighbors),
+        distances = np.empty((X.shape[0], k),
                              dtype=DTYPE)
         distances.fill(np.inf)
-        idx_array = np.zeros((X.shape[0], n_neighbors),
-                             dtype=ITYPE)
-
-        # define some variables needed for the computation
-        cdef np.ndarray bounds
-        cdef ITYPE_t i
-        cdef DTYPE_t* pt
-        cdef DTYPE_t* dist_ptr = <DTYPE_t*> np.PyArray_DATA(distances)
-        cdef ITYPE_t* idx_ptr = <ITYPE_t*> np.PyArray_DATA(idx_array)
-        cdef DTYPE_t reduced_dist_LB
-
-        # initialize heap
-        heap_init(&self.heap, dist_ptr, idx_ptr, n_neighbors)
+        indices = np.zeros((X.shape[0], k),
+                           dtype=ITYPE)
 
         self.n_trims = 0
         self.n_leaves = 0
         self.n_splits = 0
 
-        pt = <DTYPE_t*> np.PyArray_DATA(Xarr)
-        for i in range(Xarr.shape[0]):
-            reduced_dist_LB = min_rdist(self, 0, pt)
-            self.query_one_(0, pt, n_neighbors,
-                            dist_ptr, idx_ptr, reduced_dist_LB)
+        for i in range(X.shape[0]):
+            reduced_dist_LB = self.min_rdist(0, X, i)
+            self._query_one(0, i, X, distances, indices, reduced_dist_LB)
+            sort_dist_idx(self.heap.val, self.heap.idx)
 
-            dist_ptr += n_neighbors
-            idx_ptr += n_neighbors
-            pt += n_features
-
-        dist_ptr = <DTYPE_t*> np.PyArray_DATA(distances)
-        idx_ptr = <ITYPE_t*> np.PyArray_DATA(idx_array)
-        #dist_ptr = <DTYPE_t*> distances.data
-        #idx_ptr = <ITYPE_t*> idx_array.data
-        for i in range(n_neighbors * n_queries):
-            dist_ptr[i] = rdist_to_dist(dist_ptr[i])
-
-        if heap_needs_final_sort(&self.heap):
-            for i in range(n_queries):
-                sort_dist_idx(dist_ptr, idx_ptr, n_neighbors)
-                dist_ptr += n_neighbors
-                idx_ptr += n_neighbors
+        distances = self.dm.rdist_to_dist(distances)
 
         # deflatten results
         if return_distance:
             return (distances.reshape((orig_shape[:-1]) + (k,)),
-                    idx_array.reshape((orig_shape[:-1]) + (k,)))
+                    indices.reshape((orig_shape[:-1]) + (k,)))
         else:
-            return idx_array.reshape((orig_shape[:-1]) + (k,))
+            return indices.reshape((orig_shape[:-1]) + (k,))
+
+    cdef void _query_one(self, ITYPE_t i_node, ITYPE_t i_pt,
+                         DTYPE_t[:, ::1] points,
+                         DTYPE_t[:, ::1] distances,
+                         ITYPE_t[:, ::1] indices,
+                         DTYPE_t reduced_dist_LB):
+        cdef DTYPE_t[::1] pt = points[i_pt]
+        cdef DTYPE_t[::1] dist = distances[i_pt]
+        cdef ITYPE_t[::1] ind = indices[i_pt]
+
+        cdef NodeData_t node_info = self.node_data_arr[i_node]
+
+        cdef DTYPE_t dist_pt, reduced_dist_LB_1, reduced_dist_LB_2
+        cdef ITYPE_t i, i1, i2
+
+        # Initialize the heap
+        self.heap.wrap(dist, ind)
+
+        #------------------------------------------------------------
+        # Case 1: query point is outside node radius:
+        #         trim it from the query
+        if reduced_dist_LB > self.heap.largest():
+            self.n_trims += 1
+
+        #------------------------------------------------------------
+        # Case 2: this is a leaf node.  Update set of nearby points
+        elif node_info.is_leaf:
+            self.n_leaves += 1
+            for i in range(node_info.idx_start, node_info.idx_end):
+                dist_pt = self.dm.rdist(points, i_pt,
+                                        self.data, self.idx_array[i])
+
+                if dist_pt < self.heap.largest():
+                    self.heap.push(dist_pt, self.idx_array[i])
+
+        #------------------------------------------------------------
+        # Case 3: Node is not a leaf.  Recursively query subnodes
+        #         starting with the closest
+        else:
+            self.n_splits += 1
+            i1 = 2 * i_node + 1
+            i2 = i1 + 1
+            reduced_dist_LB_1 = self.min_rdist(i1, points, i_pt)
+            reduced_dist_LB_2 = self.min_rdist(i2, points, i_pt)
+
+            # recursively query subnodes
+            if reduced_dist_LB_1 <= reduced_dist_LB_2:
+                self._query_one(i1, i_pt, points, distances, indices,
+                                reduced_dist_LB_1)
+                self._query_one(i2, i_pt, points, distances, indices,
+                                reduced_dist_LB_2)
+            else:
+                self._query_one(i2, i_pt, points, distances, indices,
+                                reduced_dist_LB_2)
+                self._query_one(i1, i_pt, points, distances, indices,
+                                reduced_dist_LB_1)
+        
 
     #----------------------------------------------------------------------
     # These should be specialized in derived classes
@@ -289,12 +315,23 @@ cdef class _BinaryTree:
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
         raise NotImplementedError
 
+    cdef DTYPE_t min_rdist(self, ITYPE_t i_node,
+                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
+        raise NotImplementedError
+
     cdef DTYPE_t max_dist(self, ITYPE_t i_node,
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
         raise NotImplementedError
 
+    cdef DTYPE_t max_rdist(self, ITYPE_t i_node,
+                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
+        raise NotImplementedError
+
 
 cdef class BallTree(_BinaryTree):
+    """Ball Tree for nearest neighbor queries
+
+    """
     cdef DTYPE_t[:, ::1] centroids_arr
 
     def __cinit__(self):
@@ -344,10 +381,15 @@ cdef class BallTree(_BinaryTree):
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
         cdef DTYPE_t dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
         return fmax(0, dist_pt - self.node_data_arr[i_node].radius)
-            
-    cdef DTYPE_t max_dist(self, ITYPE_t i_node,
-                          DTYPE_t[:, ::1] p, ITYPE_t i_p):
+
+    cdef DTYPE_t min_rdist(self, ITYPE_t i_node,
+                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
         cdef DTYPE_t dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
-        return dist_pt + self.node_data_arr[i_node].radius
+        return pow(fmax(0, dist_pt - self.node_data_arr[i_node].radius), 2)
+            
+    cdef DTYPE_t max_rdist(self, ITYPE_t i_node,
+                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
+        cdef DTYPE_t dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
+        return pow(dist_pt + self.node_data_arr[i_node].radius, 2)
 
     

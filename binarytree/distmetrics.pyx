@@ -2,7 +2,6 @@
 #cython: boundscheck=False
 #cython: wraparound=False
 #cython: cdivision=True
-
 import numpy as np
 from typedefs import ITYPE, DTYPE
 
@@ -12,9 +11,23 @@ from libc.math cimport sqrt, pow, fabs
 
 
 cdef class DistanceMetric:
-    cdef DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
-                      DTYPE_t[:, ::1] X2, ITYPE_t i2):
+    def __init__(self, **kwargs):
+        if self.__class__ is DistanceMetric:
+            raise NotImplementedError("DistanceMetric is an abstract class")
+
+    cdef inline DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                             DTYPE_t[:, ::1] X2, ITYPE_t i2):
         return 0.0
+
+    cdef inline DTYPE_t rdist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
+        return self.dist(X1, i1, X2, i2)
+
+    def rdist_to_dist(self, rdist):
+        return rdist
+
+    def dist_to_rdist(self, dist):
+        return dist
 
     def pairwise(self, X, Y=None):
         """Compute pairwise distances between arrays
@@ -66,9 +79,10 @@ cdef class DistanceMetric:
         return D
 
 
+@cython.final
 cdef class EuclideanDistance(DistanceMetric):
-    cdef DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
-                      DTYPE_t[:, ::1] X2, ITYPE_t i2):
+    cdef inline DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                             DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
         for j in range(n_features):
@@ -76,10 +90,26 @@ cdef class EuclideanDistance(DistanceMetric):
             d += tmp * tmp
         return sqrt(d)
 
+    cdef inline DTYPE_t rdist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
+        cdef ITYPE_t n_features = X1.shape[1]
+        cdef DTYPE_t tmp, d=0
+        for j in range(n_features):
+            tmp = X1[i1, j] - X2[i2, j]
+            d += tmp * tmp
+        return d
 
+    def rdist_to_dist(self, rdist):
+        return np.sqrt(rdist)
+
+    def dist_to_rdist(self, dist):
+        return dist ** 2
+
+
+@cython.final
 cdef class ManhattanDistance(DistanceMetric):
-    cdef DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
-                      DTYPE_t[:, ::1] X2, ITYPE_t i2):
+    cdef inline DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                             DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
         for j in range(n_features):
@@ -87,6 +117,7 @@ cdef class ManhattanDistance(DistanceMetric):
         return d
 
 
+@cython.final
 cdef class MinkowskiDistance(DistanceMetric):
     def __init__(self, p=2):
         if p <= 0:
@@ -94,8 +125,8 @@ cdef class MinkowskiDistance(DistanceMetric):
         self.p = p
 
     @cython.cdivision(True)
-    cdef DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
-                      DTYPE_t[:, ::1] X2, ITYPE_t i2):
+    cdef inline DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                             DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
         for j in range(n_features):
@@ -105,11 +136,16 @@ cdef class MinkowskiDistance(DistanceMetric):
 
 def Distance(metric, **kwargs):
     if metric in ['euclidean', 'l2']:
-        return EuclideanDistance(**kwargs)
+        return EuclideanDistance()
     elif metric in ['cityblock', 'manhattan', 'l1']:
-        return ManhattanDistance(**kwargs)
+        return ManhattanDistance()
     elif metric == 'minkowski':
-        return MinkowskiDistance(**kwargs)
+        if kwargs.get('p', 1) == 1:
+            return ManhattanDistance()
+        elif kwargs.get('p', 2) == 2:
+            return EuclideanDistance()
+        else:
+            return MinkowskiDistance(**kwargs)
     else:
         raise ValueError("Unrecognized metric '%s'" % str(metric))
     

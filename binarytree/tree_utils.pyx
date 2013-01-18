@@ -1,4 +1,7 @@
 #!python
+#cython: boundscheck=False
+#cython: wraparound=False
+#cython: cdivision=True
 cimport cython
 cimport numpy as np
 
@@ -20,7 +23,7 @@ from typedefs import DTYPE, ITYPE
 #
 #  In this implementation, an empty heap should be full of infinities
 #
-
+@cython.final
 cdef class MaxHeap:
     def __init__(self, size=1):
         self.val = np.zeros(size, dtype=DTYPE) + np.inf
@@ -38,10 +41,10 @@ cdef class MaxHeap:
         if self.val.shape[0] != self.idx.shape[0]:
             raise ValueError("val and idx shapes should match")
 
-    cpdef DTYPE_t largest(self):
+    cpdef inline DTYPE_t largest(self):
         return self.val[0]
 
-    cpdef ITYPE_t idx_largest(self):
+    cpdef inline ITYPE_t idx_largest(self):
         return self.idx[0]
 
     cpdef push(self, DTYPE_t val, ITYPE_t i_val):
@@ -97,16 +100,12 @@ cdef class MaxHeap:
 #    i = np.argsort(dist)
 #    dist = dist[i]
 #    idx = idx[i]
-@cython.boundscheck(False)
-@cython.wraparound(False)
 cdef inline void swap(DITYPE_t[::1] arr, ITYPE_t i1, ITYPE_t i2):
     cdef DITYPE_t tmp = arr[i1]
     arr[i1] = arr[i2]
     arr[i2] = tmp
 
 
-@cython.boundscheck(False)
-@cython.wraparound(False)
 cpdef sort_dist_idx(DTYPE_t[::1] dist, ITYPE_t[::1] idx):
     if dist.shape[0] != idx.shape[0]:
         raise ValueError('dist and ind should have matching shapes')
@@ -114,9 +113,6 @@ cpdef sort_dist_idx(DTYPE_t[::1] dist, ITYPE_t[::1] idx):
         _sort_dist_idx(dist, idx, 0, dist.shape[0])
 
 
-@cython.cdivision(True)
-@cython.boundscheck(False)
-@cython.wraparound(False)
 cdef void _sort_dist_idx(DTYPE_t[::1] dist, ITYPE_t[::1] idx,
                          ITYPE_t lower, ITYPE_t upper):
     cdef DTYPE_t pivot_val
@@ -149,8 +145,6 @@ cdef void _sort_dist_idx(DTYPE_t[::1] dist, ITYPE_t[::1] idx,
 #  this computes the equivalent of the following:
 #  j_max = np.argmax(np.max(data[indices[idx_start:idx_end]], 0) -
 #                    np.min(data[indices[idx_start:idx_end]], 0))
-@cython.boundscheck(False)
-@cython.wraparound(False)
 cpdef ITYPE_t find_split_dim(DTYPE_t[:, ::1] data,
                              ITYPE_t[::1] indices,
                              ITYPE_t idx_start, ITYPE_t idx_end):
@@ -187,8 +181,6 @@ cpdef ITYPE_t find_split_dim(DTYPE_t[:, ::1] data,
 #           <= data[indices[split_index:idx_end], split_dim])
 #  will hold.  The algorithm amounts to a partial quicksort.
 #  An integer is returned to be compatible with cpdef
-@cython.boundscheck(False)
-@cython.wraparound(False)
 cpdef ITYPE_t partition_indices(DTYPE_t[:, ::1] data,
                                 ITYPE_t[::1] indices,
                                 ITYPE_t split_dim,
