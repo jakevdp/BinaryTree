@@ -5,17 +5,34 @@ from binary_tree import BallTree, _BinaryTree
 from sklearn.neighbors import BallTree as skBallTree
 from scipy.spatial import cKDTree
 
-N1 = 2000
-N2 = 2000
-k = 10
-d = 20
+from sklearn.datasets import fetch_olivetti_faces
 
-X = np.random.random((N1, d)).astype(float)
+k = 10
+d = 5
+
+if 0:
+    faces = fetch_olivetti_faces()
+    data = faces.data
+
+    d = 5
+
+    X = np.vstack([data[:, i * d:(i + 1) * d].astype(np.float64)
+                   for i in range(5)])
+    Y = np.vstack([data[:, i * d:(i + 1) * d].astype(np.float64)
+                   for i in range(5, 10)])
+
+else:
+    N1 = 2000
+    N2 = 2000
+
+    X = np.random.random((N1, d)).astype(float)
+    Y = np.random.random((N2, d))
+
+print X.shape, Y.shape
+
 bt = BallTree(X)
 skbt = skBallTree(X)
 kdt = cKDTree(X)
-
-Y = np.random.random((N2, d))
 
 t0 = time()
 dist1, ind1 = bt.query(Y, k)

@@ -217,33 +217,37 @@ cdef class _BinaryTree:
                              "to the number of training points")
 
         # flatten X, and save original shape information
-        orig_shape = X.shape
-        X = X.reshape((-1, self.data.shape[1]))
+        cdef DTYPE_t[:, ::1] Xarr = X.reshape((-1, self.data.shape[1]))
+        cdef ITYPE_t i
 
         # allocate distances and indices for return
-        distances = np.empty((X.shape[0], k),
+        distances = np.empty((Xarr.shape[0], k),
                              dtype=DTYPE)
         distances.fill(np.inf)
-        indices = np.zeros((X.shape[0], k),
+        indices = np.zeros((Xarr.shape[0], k),
                            dtype=ITYPE)
+
+        cdef DTYPE_t[:, ::1] distances_arr = distances
+        cdef ITYPE_t[:, ::1] indices_arr = indices
 
         self.n_trims = 0
         self.n_leaves = 0
         self.n_splits = 0
 
-        for i in range(X.shape[0]):
-            reduced_dist_LB = self.min_rdist(0, X, i)
-            self._query_one(0, i, X, distances, indices, reduced_dist_LB)
+        for i in range(Xarr.shape[0]):
+            reduced_dist_LB = self.min_rdist(0, Xarr, i)
+            self._query_one(0, i, Xarr, distances_arr,
+                            indices_arr, reduced_dist_LB)
             sort_dist_idx(self.heap.val, self.heap.idx)
 
         distances = self.dm.rdist_to_dist(distances)
 
         # deflatten results
         if return_distance:
-            return (distances.reshape((orig_shape[:-1]) + (k,)),
-                    indices.reshape((orig_shape[:-1]) + (k,)))
+            return (distances.reshape((X.shape[:-1]) + (k,)),
+                    indices.reshape((X.shape[:-1]) + (k,)))
         else:
-            return indices.reshape((orig_shape[:-1]) + (k,))
+            return indices.reshape((X.shape[:-1]) + (k,))
 
     cdef void _query_one(self, ITYPE_t i_node, ITYPE_t i_pt,
                          DTYPE_t[:, ::1] points,
@@ -330,9 +334,7 @@ cdef class _BinaryTree:
 
 @cython.final
 cdef class BallTree(_BinaryTree):
-    """Ball Tree for nearest neighbor queries
-
-    """
+    """Ball Tree for nearest neighbor queries"""
     cdef DTYPE_t[:, ::1] centroids_arr
 
     def __cinit__(self):
