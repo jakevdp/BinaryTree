@@ -328,6 +328,7 @@ cdef class _BinaryTree:
         raise NotImplementedError
 
 
+@cython.final
 cdef class BallTree(_BinaryTree):
     """Ball Tree for nearest neighbor queries
 

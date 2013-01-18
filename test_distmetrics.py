@@ -1,43 +1,26 @@
-from time import time
-
 import numpy as np
-from sklearn.metrics import pairwise_distances
-from distmetrics import EuclideanDistance
-from scipy.spatial.distance import pdist, cdist, squareform
+from distmetrics import Distance
+from scipy.spatial.distance import cdist
 
-X = np.random.random((2000, 3))
 
-t0 = time()
-D0 = cdist(X, X)
-t1 = time()
-print "scipy.spatial.cdist: %.3g s" % (t1 - t0)
-print
+METRICS = {'euclidean':{},
+           'cityblock':{},
+           'minkowski':{'p':3}}
 
-t0 = time()
-D1 = squareform(pdist(X))
-t1 = time()
-print "scipy.spatial.pdist: %.3g s" % (t1 - t0)
-print "results match:", np.allclose(D0, D1)
-print
 
-t0 = time()
-D2 = pairwise_distances(X)
-t1 = time()
-print "sklearn.metrics.pairwise: %.3g s" % (t1 - t0)
-print "results match:", np.allclose(D1, D2)
-print
+def check_dist(X, Y, metric, kwargs):
+    D1 = Distance(metric, **kwargs).pairwise(X, Y)
+    D2 = cdist(X, Y, metric, **kwargs)
 
-dist = EuclideanDistance()
-t0 = time()
-D3 = dist.pairwise(X)
-t1 = time()
-print "dist.pairwise(X): %.3g s" % (t1 - t0)
-print "results match:", np.allclose(D1, D3)
-print
 
-t0 = time()
-D4 = dist.pairwise(X, X)
-t1 = time()
-print "dist.pairwise(X, X): %.3g s" % (t1 - t0)
-print "results match:", np.allclose(D1, D4)
-print
+def test_pdist():
+    X = np.random.random((40, 3))
+    Y = np.random.random((30, 3))
+
+    for (metric, kwargs) in METRICS.iteritems():
+        yield check_dist, X, Y, metric, kwargs
+        yield check_dist, X, X, metric, kwargs
+
+if __name__ == '__main__':
+    import nose
+    nose.runmodule()
