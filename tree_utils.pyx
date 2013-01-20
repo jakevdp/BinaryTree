@@ -41,12 +41,6 @@ cdef class MaxHeap:
         if self.val.shape[0] != self.idx.shape[0]:
             raise ValueError("val and idx shapes should match")
 
-    cpdef inline DTYPE_t largest(self):
-        return self.val[0]
-
-    cpdef inline ITYPE_t idx_largest(self):
-        return self.idx[0]
-
     cpdef push(self, DTYPE_t val, ITYPE_t i_val):
         cdef ITYPE_t i, ic1, ic2, i_tmp
         cdef DTYPE_t d_tmp
