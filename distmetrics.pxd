@@ -5,6 +5,7 @@ cimport numpy as np
 from typedefs cimport DTYPE_t, ITYPE_t
 
 cdef class DistanceMetric:
+    cdef int n_calls
     cdef DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
                       DTYPE_t[:, ::1] X2, ITYPE_t i2)
     cdef DTYPE_t rdist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,

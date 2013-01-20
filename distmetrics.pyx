@@ -11,6 +11,15 @@ from libc.math cimport sqrt, pow, fabs
 
 
 cdef class DistanceMetric:
+    def __cinit__(self):
+        self.n_calls = 0
+
+    def reset_n_calls(self):
+        self.n_calls = 0
+
+    def get_n_calls(self):
+        return self.n_calls
+
     def __init__(self, **kwargs):
         if self.__class__ is DistanceMetric:
             raise NotImplementedError("DistanceMetric is an abstract class")
@@ -85,6 +94,7 @@ cdef class EuclideanDistance(DistanceMetric):
                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
+        self.n_calls += 1
         for j in range(n_features):
             tmp = X1[i1, j] - X2[i2, j]
             d += tmp * tmp
@@ -94,6 +104,7 @@ cdef class EuclideanDistance(DistanceMetric):
                               DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
+        self.n_calls += 1
         for j in range(n_features):
             tmp = X1[i1, j] - X2[i2, j]
             d += tmp * tmp
@@ -112,6 +123,7 @@ cdef class ManhattanDistance(DistanceMetric):
                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
+        self.n_calls += 1
         for j in range(n_features):
             d += fabs(X1[i1, j] - X2[i2, j])
         return d
@@ -129,6 +141,7 @@ cdef class MinkowskiDistance(DistanceMetric):
                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
+        self.n_calls += 1
         for j in range(n_features):
             d += pow(fabs(X1[i1, j] - X2[i2, j]), self.p)
         return pow(d, 1. / self.p)

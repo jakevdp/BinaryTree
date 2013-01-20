@@ -70,6 +70,12 @@ cdef class _BinaryTree:
     cdef int n_leaves
     cdef int n_splits
 
+    def reset_dist_count(self):
+        self.dm.n_calls = 0
+
+    def dist_count(self):
+        return self.dm.n_calls
+
     # Use cinit to initialize all arrays to empty: this prevents errors
     # in rare cases where __init__ is not called
     def __cinit__(self):
