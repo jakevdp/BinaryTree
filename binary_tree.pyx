@@ -154,7 +154,6 @@ cdef class _BinaryTree:
     def get_tree_stats(self):
         return (self.n_trims, self.n_leaves, self.n_splits)
 
-    @cython.cdivision(True)
     cdef void _recursive_build(self, ITYPE_t i_node,
                                ITYPE_t idx_start, ITYPE_t idx_end):
         cdef ITYPE_t imax
@@ -354,19 +353,19 @@ cdef class _BinaryTree:
 
     cdef DTYPE_t min_dist(self, ITYPE_t i_node,
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
-        raise NotImplementedError
+        raise NotImplementedError()
 
     cdef DTYPE_t min_rdist(self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
-        raise NotImplementedError
+        raise NotImplementedError()
 
     cdef DTYPE_t max_dist(self, ITYPE_t i_node,
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
-        raise NotImplementedError
+        raise NotImplementedError()
 
     cdef DTYPE_t max_rdist(self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
-        raise NotImplementedError
+        raise NotImplementedError()
 
 
 @cython.final
@@ -378,8 +377,8 @@ cdef class BallTree(_BinaryTree):
         self.centroids_arr = np.empty((0, 1), dtype=DTYPE, order='C')
 
     def get_arrays(self):
-        return map(np.asarray, (self.data, self.idx_array,
-                                self.node_data_arr, self.centroids_arr))
+        return map(np.asarray, (self.data, self.idx_array, self.node_data_arr,
+                                self.centroids_arr))
 
     cdef void allocate_data(self, ITYPE_t n_nodes, ITYPE_t n_features):
         self.centroids_arr = np.zeros((n_nodes, n_features), dtype=DTYPE)
@@ -436,9 +435,9 @@ cdef class BallTree(_BinaryTree):
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
         cdef DTYPE_t dist_pt
         if self.euclidean:
-            dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
-        else:
             dist_pt = dist(p, i_p, self.centroids_arr, i_node)
+        else:
+            dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
         return dist_pt + self.node_data_arr[i_node].radius
 
     cdef DTYPE_t min_rdist(self, ITYPE_t i_node,
@@ -450,4 +449,83 @@ cdef class BallTree(_BinaryTree):
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
         cdef DTYPE_t tmp = self.max_dist(i_node, p, i_p)
         return tmp * tmp
-    
+
+
+cdef class KDTree(_BinaryTree):
+    """KD Tree for nearest neighbor queries"""
+    cdef DTYPE_t[:, ::1] lower_bounds
+    cdef DTYPE_t[:, ::1] upper_bounds
+
+    def __cinit__(self):
+        self.lower_bounds = np.empty((0, 1), dtype=DTYPE, order='C')
+        self.upper_bounds = np.empty((0, 1), dtype=DTYPE, order='C')
+
+    def get_arrays(self):
+        return map(np.asarray, (self.data, self.idx_array, self.node_data_arr,
+                                self.lower_bounds, self.upper_bounds))
+
+    cdef void allocate_data(self, ITYPE_t n_nodes, ITYPE_t n_features):
+        self.lower_bounds = np.zeros((n_nodes, n_features),
+                                         dtype=DTYPE, order='C')
+        self.upper_bounds = np.zeros((n_nodes, n_features),
+                                         dtype=DTYPE, order='C')
+
+    cdef void init_node(self, ITYPE_t i_node,
+                        ITYPE_t idx_start, ITYPE_t idx_end):
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef ITYPE_t i, j, idx_i
+
+        # determine Node bounds
+        for j in range(n_features):
+            self.lower_bounds[i_node, j] = INF
+            self.upper_bounds[i_node, j] = -INF
+
+        for i in range(idx_start, idx_end):
+            idx_i = self.idx_array[i]
+            for j in range(n_features):
+                self.lower_bounds[i_node, j] =\
+                    fmin(self.lower_bounds[i_node, j],
+                         self.data[idx_i, j])
+                self.upper_bounds[i_node, j] =\
+                    fmax(self.upper_bounds[i_node, j],
+                         self.data[idx_i, j])
+
+        self.node_data_arr[i_node].idx_start = idx_start
+        self.node_data_arr[i_node].idx_end = idx_end
+
+    cdef DTYPE_t min_rdist(self, ITYPE_t i_node,
+                          DTYPE_t[:, ::1] p, ITYPE_t i_p):
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef DTYPE_t d, d_lo, d_hi, rdist=0.0
+        cdef ITYPE_t j
+
+        # here we'll use the fact that x + abs(x) = 2 * max(x, 0)
+        for j in range(n_features):
+            d_lo = self.lower_bounds[i_node, j] - p[i_p, j]
+            d_hi = p[i_p, j] - self.upper_bounds[i_node, j]
+            d = (d_lo + fabs(d_lo)) + (d_hi + fabs(d_hi))
+            rdist += pow(d, self.dm.p)
+
+        return rdist / pow(2, self.dm.p)
+
+    cdef DTYPE_t min_dist(self, ITYPE_t i_node,
+                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
+        return pow(self.min_rdist(i_node, p, i_p), 1. / self.dm.p)
+
+    cdef DTYPE_t max_rdist(self, ITYPE_t i_node,
+                          DTYPE_t[:, ::1] p, ITYPE_t i_p):
+        cdef ITYPE_t n_features = self.data.shape[1]
+
+        cdef DTYPE_t d, d_lo, d_hi, rdist=0.0
+        cdef ITYPE_t j
+
+        for j in range(n_features):
+            d_lo = self.lower_bounds[i_node, j] - p[i_p, j]
+            d_hi = p[i_p, j] - self.upper_bounds[i_node, j]
+            rdist += pow(fmax(d_lo, d_hi), self.dm.p)
+
+        return rdist
+
+    cdef DTYPE_t max_dist(self, ITYPE_t i_node,
+                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
+        return pow(self.max_rdist(i_node, p, i_p), 1. / self.dm.p)

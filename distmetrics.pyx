@@ -13,6 +13,7 @@ from libc.math cimport sqrt, pow, fabs
 cdef class DistanceMetric:
     def __cinit__(self):
         self.n_calls = 0
+        self.p = 2
 
     def reset_n_calls(self):
         self.n_calls = 0
@@ -90,6 +91,9 @@ cdef class DistanceMetric:
 
 @cython.final
 cdef class EuclideanDistance(DistanceMetric):
+    def __init__(self):
+        self.p = 2
+
     cdef inline DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
@@ -119,6 +123,9 @@ cdef class EuclideanDistance(DistanceMetric):
 
 @cython.final
 cdef class ManhattanDistance(DistanceMetric):
+    def __init__(self):
+        self.p = 1
+
     cdef inline DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
