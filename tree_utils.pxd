@@ -10,6 +10,9 @@ cdef class MaxHeap:
     cdef inline ITYPE_t idx_largest(self):
         return self.idx[0]
 
+    cdef inline void sort(self):
+        sort_dist_idx(self.val, self.idx)
+
     cpdef wrap(self, DTYPE_t[::1] val, ITYPE_t[::1] idx)
     cpdef push(self, DTYPE_t val, ITYPE_t i_val)
 

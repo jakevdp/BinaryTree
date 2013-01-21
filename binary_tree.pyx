@@ -11,7 +11,7 @@ import warnings
 import numpy as np
 from sklearn.utils import array2d
 
-from libc.math cimport fmax, fmin, fabs
+from libc.math cimport fmax, fmin, fabs, sqrt
 cimport numpy as np
 cimport cython
 
@@ -19,7 +19,7 @@ from distmetrics cimport DistanceMetric
 from distmetrics import Distance
 
 from tree_utils cimport\
-    MaxHeap, partition_indices, find_split_dim, sort_dist_idx
+    MaxHeap, partition_indices, find_split_dim
 
 #####################################################################
 # global types and variables
@@ -49,6 +49,25 @@ cdef NodeData_t dummy
 cdef NodeData_t[:] dummy_view = <NodeData_t[:1]> &dummy
 NodeData = np.asarray(dummy_view).dtype
 
+######################################################################
+# Inline distance function for Euclidean case
+cdef inline DTYPE_t dist(DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                         DTYPE_t[:, ::1] X2, ITYPE_t i2):
+    cdef ITYPE_t n_features = X1.shape[1]
+    cdef DTYPE_t tmp, d=0
+    for j in range(n_features):
+        tmp = X1[i1, j] - X2[i2, j]
+        d += tmp * tmp
+    return sqrt(d)
+
+cdef inline DTYPE_t rdist(DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                          DTYPE_t[:, ::1] X2, ITYPE_t i2):
+    cdef ITYPE_t n_features = X1.shape[1]
+    cdef DTYPE_t tmp, d=0
+    for j in range(n_features):
+        tmp = X1[i1, j] - X2[i2, j]
+        d += tmp * tmp
+    return d
 
 ######################################################################
 # BinaryTree Abstract Base Class
@@ -64,6 +83,8 @@ cdef class _BinaryTree:
 
     cdef MaxHeap heap
     cdef DistanceMetric dm
+
+    cdef int euclidean
 
     # variables to keep track of building & querying stats
     cdef int n_trims
@@ -95,6 +116,8 @@ cdef class _BinaryTree:
         self.node_data_arr = np.zeros(data.shape[0], dtype=NodeData)
         self.leaf_size = leaf_size
         self.dm = Distance(metric, p=p, **kwargs)
+        self.euclidean = (self.dm.__class__.__name__ == 'EuclideanDistance')
+
         self.heap = MaxHeap()
 
         # validate data
@@ -224,6 +247,7 @@ cdef class _BinaryTree:
 
         # flatten X, and save original shape information
         cdef DTYPE_t[:, ::1] Xarr = X.reshape((-1, self.data.shape[1]))
+        cdef DTYPE_t reduced_dist_LB
         cdef ITYPE_t i
 
         # allocate distances and indices for return
@@ -244,7 +268,7 @@ cdef class _BinaryTree:
             reduced_dist_LB = self.min_rdist(0, Xarr, i)
             self._query_one(0, i, Xarr, distances_arr,
                             indices_arr, reduced_dist_LB)
-            sort_dist_idx(self.heap.val, self.heap.idx)
+            self.heap.sort()
 
         distances = self.dm.rdist_to_dist(distances)
 
@@ -263,7 +287,6 @@ cdef class _BinaryTree:
         cdef DTYPE_t[::1] pt = points[i_pt]
         cdef DTYPE_t[::1] dist = distances[i_pt]
         cdef ITYPE_t[::1] ind = indices[i_pt]
-
         cdef NodeData_t node_info = self.node_data_arr[i_node]
 
         cdef DTYPE_t dist_pt, reduced_dist_LB_1, reduced_dist_LB_2
@@ -282,12 +305,20 @@ cdef class _BinaryTree:
         # Case 2: this is a leaf node.  Update set of nearby points
         elif node_info.is_leaf:
             self.n_leaves += 1
-            for i in range(node_info.idx_start, node_info.idx_end):
-                dist_pt = self.dm.rdist(points, i_pt,
-                                        self.data, self.idx_array[i])
+            if self.euclidean:
+                for i in range(node_info.idx_start, node_info.idx_end):
+                    dist_pt = rdist(points, i_pt,
+                                    self.data, self.idx_array[i])
 
-                if dist_pt < self.heap.largest():
-                    self.heap.push(dist_pt, self.idx_array[i])
+                    if dist_pt < self.heap.largest():
+                        self.heap.push(dist_pt, self.idx_array[i])
+            else:
+                for i in range(node_info.idx_start, node_info.idx_end):
+                    dist_pt = self.dm.rdist(points, i_pt,
+                                            self.data, self.idx_array[i])
+
+                    if dist_pt < self.heap.largest():
+                        self.heap.push(dist_pt, self.idx_array[i])
 
         #------------------------------------------------------------
         # Case 3: Node is not a leaf.  Recursively query subnodes
@@ -377,10 +408,16 @@ cdef class BallTree(_BinaryTree):
 
         # determine Node radius
         radius = 0
-        for i in range(idx_start, idx_end):
-            radius = fmax(radius,
-                          self.dm.dist(self.centroids_arr, i_node, 
-                                       self.data, self.idx_array[i]))
+        if self.euclidean:
+            for i in range(idx_start, idx_end):
+                radius = fmax(radius,
+                              dist(self.centroids_arr, i_node, 
+                                   self.data, self.idx_array[i]))
+        else:
+            for i in range(idx_start, idx_end):
+                radius = fmax(radius,
+                              self.dm.dist(self.centroids_arr, i_node, 
+                                           self.data, self.idx_array[i]))
 
         self.node_data_arr[i_node].radius = radius
         self.node_data_arr[i_node].idx_start = idx_start
@@ -388,17 +425,29 @@ cdef class BallTree(_BinaryTree):
 
     cdef DTYPE_t min_dist(self, ITYPE_t i_node,
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
-        cdef DTYPE_t dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
+        cdef DTYPE_t dist_pt
+        if self.euclidean:
+            dist_pt = dist(p, i_p, self.centroids_arr, i_node)
+        else:
+            dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
         return fmax(0, dist_pt - self.node_data_arr[i_node].radius)
+            
+    cdef DTYPE_t max_dist(self, ITYPE_t i_node,
+                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
+        cdef DTYPE_t dist_pt
+        if self.euclidean:
+            dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
+        else:
+            dist_pt = dist(p, i_p, self.centroids_arr, i_node)
+        return dist_pt + self.node_data_arr[i_node].radius
 
     cdef DTYPE_t min_rdist(self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
-        cdef DTYPE_t dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
-        return pow(fmax(0, dist_pt - self.node_data_arr[i_node].radius), 2)
+        cdef DTYPE_t tmp = self.min_dist(i_node, p, i_p)
+        return tmp * tmp
             
     cdef DTYPE_t max_rdist(self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
-        cdef DTYPE_t dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
-        return pow(dist_pt + self.node_data_arr[i_node].radius, 2)
-
+        cdef DTYPE_t tmp = self.max_dist(i_node, p, i_p)
+        return tmp * tmp
     
