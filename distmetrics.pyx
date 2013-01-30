@@ -7,30 +7,24 @@ from typedefs import ITYPE, DTYPE
 
 cimport numpy as np
 cimport cython
-from libc.math cimport sqrt, pow, fabs
+from libc.math cimport sqrt, pow, fabs, fmax
 
 
 cdef class DistanceMetric:
     def __cinit__(self):
-        self.n_calls = 0
+        self.axis_aligned = False
         self.p = 2
-
-    def reset_n_calls(self):
-        self.n_calls = 0
-
-    def get_n_calls(self):
-        return self.n_calls
 
     def __init__(self, **kwargs):
         if self.__class__ is DistanceMetric:
             raise NotImplementedError("DistanceMetric is an abstract class")
 
-    cdef inline DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
-                             DTYPE_t[:, ::1] X2, ITYPE_t i2):
-        return 0.0
+    cdef DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                      DTYPE_t[:, ::1] X2, ITYPE_t i2):
+        return -999
 
-    cdef inline DTYPE_t rdist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
-                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
+    cdef DTYPE_t rdist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                       DTYPE_t[:, ::1] X2, ITYPE_t i2):
         return self.dist(X1, i1, X2, i2)
 
     def rdist_to_dist(self, rdist):
@@ -81,8 +75,9 @@ cdef class DistanceMetric:
         if X.shape[1] != Y.shape[1]:
             raise ValueError('X and Y must have the same second dimension')
 
-        cdef DTYPE_t[:, ::1] D = np.zeros((nX, nX),
-                                            dtype=DTYPE, order='C')
+        cdef DTYPE_t[:, ::1] D = np.zeros((nX, nY),
+                                          dtype=DTYPE, order='C')
+
         for i1 in range(nX):
             for i2 in range(nY):
                 D[i1, i2] = self.dist(X, i1, Y, i2)
@@ -92,13 +87,13 @@ cdef class DistanceMetric:
 @cython.final
 cdef class EuclideanDistance(DistanceMetric):
     def __init__(self):
+        self.axis_aligned = True
         self.p = 2
 
     cdef inline DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
-        self.n_calls += 1
         for j in range(n_features):
             tmp = X1[i1, j] - X2[i2, j]
             d += tmp * tmp
@@ -108,7 +103,6 @@ cdef class EuclideanDistance(DistanceMetric):
                               DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
-        self.n_calls += 1
         for j in range(n_features):
             tmp = X1[i1, j] - X2[i2, j]
             d += tmp * tmp
@@ -124,13 +118,13 @@ cdef class EuclideanDistance(DistanceMetric):
 @cython.final
 cdef class ManhattanDistance(DistanceMetric):
     def __init__(self):
+        self.axis_aligned = True
         self.p = 1
 
     cdef inline DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
-        self.n_calls += 1
         for j in range(n_features):
             d += fabs(X1[i1, j] - X2[i2, j])
         return d
@@ -139,6 +133,7 @@ cdef class ManhattanDistance(DistanceMetric):
 @cython.final
 cdef class MinkowskiDistance(DistanceMetric):
     def __init__(self, p=2):
+        self.axis_aligned = True
         if p <= 0:
             raise ValueError("p must be positive")
         self.p = p
@@ -148,10 +143,25 @@ cdef class MinkowskiDistance(DistanceMetric):
                              DTYPE_t[:, ::1] X2, ITYPE_t i2):
         cdef ITYPE_t n_features = X1.shape[1]
         cdef DTYPE_t tmp, d=0
-        self.n_calls += 1
         for j in range(n_features):
             d += pow(fabs(X1[i1, j] - X2[i2, j]), self.p)
         return pow(d, 1. / self.p)
+
+
+@cython.final
+cdef class ChebyshevDistance(DistanceMetric):
+    def __init__(self, p=2):
+        self.axis_aligned = False
+        self.p = np.inf
+
+    @cython.cdivision(True)
+    cdef inline DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                             DTYPE_t[:, ::1] X2, ITYPE_t i2):
+        cdef ITYPE_t n_features = X1.shape[1]
+        cdef DTYPE_t d=0
+        for j in range(n_features):
+            d = fmax(d, fabs(X1[i1, j] - X2[i2, j]))
+        return d
 
 
 def Distance(metric, **kwargs):
@@ -159,12 +169,18 @@ def Distance(metric, **kwargs):
         return EuclideanDistance()
     elif metric in ['cityblock', 'manhattan', 'l1']:
         return ManhattanDistance()
+    elif metric in ['chebyshev', 'linf']:
+        return ChebyshevDistance()
     elif metric == 'minkowski':
-        if kwargs.get('p', 1) == 1:
+        p = kwargs.get('p', 2)
+        if p == 1:
             return ManhattanDistance()
-        elif kwargs.get('p', 2) == 2:
+        elif p == 2:
             return EuclideanDistance()
+        elif p == np.inf:
+            return ChebyshevDistance()
         else:
+            kwargs['p'] = p
             return MinkowskiDistance(**kwargs)
     else:
         raise ValueError("Unrecognized metric '%s'" % str(metric))

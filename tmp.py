@@ -3,7 +3,7 @@ import numpy as np
 from binary_tree import BallTree, KDTree
 
 from sklearn.neighbors import BallTree as skBallTree
-from scipy.spatial import cKDTree
+from ckdtree import cKDTree
 
 from sklearn.datasets import fetch_olivetti_faces
 
@@ -36,11 +36,11 @@ ckdt = cKDTree(X)
 kdt = KDTree(X)
 
 t0 = time()
-dist1, ind1 = bt.query(Y, k)
+dist1, ind1 = bt.query(Y, k, dualtree=False)
 t1 = time()
 dist2, ind2 = skbt.query(Y, k)
 t2 = time()
-dist3, ind3 = kdt.query(Y, k)
+dist3, ind3 = kdt.query(Y, k, dualtree=False)
 t3 = time()
 dist4, ind4 = ckdt.query(Y, k)
 t4 = time()

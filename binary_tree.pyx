@@ -1,5 +1,5 @@
 #!python
-#cython: boundscheck=False
+#cython: boundscheck=True
 #cython: wraparound=False
 #cython: cdivision=True
 """
@@ -69,13 +69,15 @@ cdef inline DTYPE_t rdist(DTYPE_t[:, ::1] X1, ITYPE_t i1,
         d += tmp * tmp
     return d
 
+
 ######################################################################
 # BinaryTree Abstract Base Class
-cdef class _BinaryTree:
+cdef class BinaryTree:
     """Abstract base class for binary tree objects"""
     cdef readonly DTYPE_t[:, ::1] data
     cdef ITYPE_t[::1] idx_array
     cdef NodeData_t[::1] node_data_arr
+    cdef DTYPE_t[:, ::1] centroids_arr
 
     cdef ITYPE_t leaf_size
     cdef ITYPE_t n_levels
@@ -90,12 +92,7 @@ cdef class _BinaryTree:
     cdef int n_trims
     cdef int n_leaves
     cdef int n_splits
-
-    def reset_dist_count(self):
-        self.dm.n_calls = 0
-
-    def dist_count(self):
-        return self.dm.n_calls
+    cdef int n_calls
 
     # Use cinit to initialize all arrays to empty: this prevents errors
     # in rare cases where __init__ is not called
@@ -103,19 +100,22 @@ cdef class _BinaryTree:
         self.data = np.empty((0, 1), dtype=DTYPE, order='C')
         self.idx_array = np.empty(0, dtype=ITYPE, order='C')
         self.node_data_arr = np.empty(0, dtype=NodeData, order='C')
+        self.centroids_arr = np.empty((0, 1), dtype=DTYPE, order='C')
         self.leaf_size = 0
         self.n_levels = 0
         self.n_nodes = 0
+        self.n_calls = 0
+        self.euclidean = False
 
     def __init__(self, DTYPE_t[:, ::1] data,
-                 leaf_size=20, metric='minkowski', p=2, **kwargs):
-        if self.__class__ is _BinaryTree:
-            raise NotImplementedError("_BinaryTree is an abstract class")
+                 leaf_size=20, metric='minkowski', **kwargs):
+        if self.__class__ is BinaryTree:
+            raise NotImplementedError("BinaryTree is an abstract class")
         self.data = data
         self.idx_array = np.arange(data.shape[0], dtype=ITYPE)
         self.node_data_arr = np.zeros(data.shape[0], dtype=NodeData)
         self.leaf_size = leaf_size
-        self.dm = Distance(metric, p=p, **kwargs)
+        self.dm = Distance(metric, **kwargs)
         self.euclidean = (self.dm.__class__.__name__ == 'EuclideanDistance')
 
         self.heap = MaxHeap()
@@ -154,6 +154,12 @@ cdef class _BinaryTree:
     def get_tree_stats(self):
         return (self.n_trims, self.n_leaves, self.n_splits)
 
+    def reset_n_calls(self):
+        self.n_calls = 0
+
+    def get_n_calls(self):
+        return self.n_calls
+
     cdef void _recursive_build(self, ITYPE_t i_node,
                                ITYPE_t idx_start, ITYPE_t idx_end):
         cdef ITYPE_t imax
@@ -191,7 +197,7 @@ cdef class _BinaryTree:
             self._recursive_build(2 * i_node + 1, idx_start, n_mid)
             self._recursive_build(2 * i_node + 2, n_mid, idx_end)
 
-    def query(self, X, k=1, return_distance=True):
+    def query(self, X, k=1, return_distance=True, dualtree=False):
         """
         query(X, k=1, return_distance=True)
 
@@ -258,16 +264,34 @@ cdef class _BinaryTree:
 
         cdef DTYPE_t[:, ::1] distances_arr = distances
         cdef ITYPE_t[:, ::1] indices_arr = indices
+        cdef DTYPE_t[::1] bounds
 
         self.n_trims = 0
         self.n_leaves = 0
         self.n_splits = 0
 
-        for i in range(Xarr.shape[0]):
-            reduced_dist_LB = self.min_rdist(0, Xarr, i)
-            self._query_one(0, i, Xarr, distances_arr,
-                            indices_arr, reduced_dist_LB)
-            self.heap.sort()
+        if dualtree:
+            # build a tree on query data with the same metric as self
+            # XXX: make sure this is correct, and allow passing a tree
+            other = self.__class__(X, leaf_size=self.leaf_size)
+            print other
+            reduced_dist_LB = self.min_rdist_dual(0, other, 0)
+
+            bounds = np.inf + np.zeros(other.data.shape[0])
+
+            self.query_dual_(0, other, 0,
+                             distances_arr, indices_arr, bounds,
+                             reduced_dist_LB)
+            for i in range(bounds.shape[0]):
+                self.heap.wrap(distances_arr[i], indices_arr[i])
+                self.heap.sort()
+
+        else:
+            for i in range(Xarr.shape[0]):
+                reduced_dist_LB = self.min_rdist(0, Xarr, i)
+                self._query_one(0, i, Xarr, distances_arr,
+                                indices_arr, reduced_dist_LB)
+                self.heap.sort()
 
         distances = self.dm.rdist_to_dist(distances)
 
@@ -340,41 +364,199 @@ cdef class _BinaryTree:
                                 reduced_dist_LB_2)
                 self._query_one(i1, i_pt, points, distances, indices,
                                 reduced_dist_LB_1)
+
+    cdef void query_dual_(BinaryTree self, ITYPE_t i_node1,
+                          BinaryTree other, ITYPE_t i_node2,
+                          DTYPE_t[:, ::1] distances,
+                          ITYPE_t[:, ::1] indices,
+                          DTYPE_t[::1] bounds,
+                          DTYPE_t reduced_dist_LB):
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef NodeData_t node_info1 = self.node_data_arr[i_node1]
+        cdef NodeData_t node_info2 = self.node_data_arr[i_node2]
+
+        cdef DTYPE_t dist_pt, reduced_dist_LB_1, reduced_dist_LB_2
+        cdef ITYPE_t i, i1, i2
+
+        #------------------------------------------------------------
+        # Case 1: nodes are further apart than the current bound:
+        #         trim both from the query
+        if reduced_dist_LB > bounds[i_node2]:
+            pass
+
+        #------------------------------------------------------------
+        # Case 2: both nodes are leaves:
+        #         do a brute-force search comparing all pairs
+        elif node_info1.is_leaf and node_info2.is_leaf:
+            bounds[i_node2] = -1
+
+            for i2 in range(node_info2.idx_start, node_info2.idx_end):
+                self.heap.wrap(distances[other.idx_array[i2]],
+                               indices[other.idx_array[i2]])
+
+                if self.heap.largest() <= reduced_dist_LB:
+                    continue
+
+                for i1 in range(node_info1.idx_start, node_info1.idx_end):
+                    dist_pt = self.dm.rdist(self.data, self.idx_array[i1],
+                                            other.data, other.idx_array[i2])
+                    if dist_pt < self.heap.largest():
+                        self.heap.push(dist_pt, self.idx_array[i1])
+                
+                # keep track of node bound
+                bounds[i_node2] = fmax(bounds[i_node2], self.heap.largest())
+            
+        #------------------------------------------------------------
+        # Case 3a: node 1 is a leaf: split node 2 and recursively
+        #          query, starting with the nearest node
+        elif node_info1.is_leaf:
+            reduced_dist_LB_1 = self.min_rdist_dual(i_node1,
+                                                    other, 2 * i_node2 + 1)
+            reduced_dist_LB_2 = self.min_rdist_dual(i_node1,
+                                                    other, 2 * i_node2 + 2)
+
+            if reduced_dist_LB_1 < reduced_dist_LB_2:
+                self.query_dual_(i_node1, other, 2 * i_node2 + 1,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_1)
+                self.query_dual_(i_node1, other, 2 * i_node2 + 2,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_2)
+            else:
+                self.query_dual_(i_node1, other, 2 * i_node2 + 2,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_2)
+                self.query_dual_(i_node1, other, 2 * i_node2 + 1,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_1)
+            
+            # update node bound information
+            bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
+                                   bounds[2 * i_node2 + 2])
+            
+        #------------------------------------------------------------
+        # Case 3b: node 2 is a leaf: split node 1 and recursively
+        #          query, starting with the nearest node
+        elif node_info2.is_leaf:
+            reduced_dist_LB_1 = self.min_rdist_dual(2 * i_node1 + 1,
+                                                    other, i_node2)
+            reduced_dist_LB_2 = self.min_rdist_dual(2 * i_node1 + 2,
+                                                    other, i_node2)
+
+            if reduced_dist_LB_1 < reduced_dist_LB_2:
+                self.query_dual_(2 * i_node1 + 1, other, i_node2,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_1)
+                self.query_dual_(2 * i_node1 + 2, other, i_node2,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_2)
+            else:
+                self.query_dual_(2 * i_node1 + 2, other, i_node2,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_2)
+                self.query_dual_(2 * i_node1 + 1, other, i_node2,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_1)
+        
+        #------------------------------------------------------------
+        # Case 4: neither node is a leaf:
+        #         split both and recursively query all four pairs
+        else:
+            reduced_dist_LB_1 = self.min_rdist_dual(2 * i_node1 + 1,
+                                                    other, 2 * i_node2 + 1)
+            reduced_dist_LB_2 = self.min_rdist_dual(2 * i_node1 + 2,
+                                                    other, 2 * i_node2 + 1)
+
+            if reduced_dist_LB_1 < reduced_dist_LB_2:
+                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 1,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_1)
+                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 1,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_2)
+            else:
+                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 1,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_2)
+                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 1,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_1)
+
+            reduced_dist_LB_1 = self.min_rdist_dual(2 * i_node1 + 1,
+                                                    other, 2 * i_node2 + 2)
+            reduced_dist_LB_2 = self.min_rdist_dual(2 * i_node1 + 2,
+                                                    other, 2 * i_node2 + 2)
+            if reduced_dist_LB_1 < reduced_dist_LB_2:
+                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 2,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_1)
+                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 2,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_2)
+            else:
+                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 2,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_2)
+                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 2,
+                                 distances, indices, bounds,
+                                 reduced_dist_LB_1)
+            
+            # update node bound information
+            bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
+                                   bounds[2 * i_node2 + 2])
+                          
         
 
     #----------------------------------------------------------------------
     # These should be specialized in derived classes
-    cdef void allocate_data(self, ITYPE_t n_nodes, ITYPE_t n_features):
+    cdef void allocate_data(BinaryTree self, ITYPE_t n_nodes,
+                            ITYPE_t n_features):
         raise NotImplementedError()
 
-    cdef void init_node(self, ITYPE_t i_node,
+    cdef void init_node(BinaryTree self, ITYPE_t i_node,
                         ITYPE_t idx_start, ITYPE_t idx_end):
         raise NotImplementedError()
 
-    cdef DTYPE_t min_dist(self, ITYPE_t i_node,
+    cdef DTYPE_t min_dist(BinaryTree self, ITYPE_t i_node,
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
         raise NotImplementedError()
 
-    cdef DTYPE_t min_rdist(self, ITYPE_t i_node,
+    cdef DTYPE_t min_rdist(BinaryTree self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
         raise NotImplementedError()
 
-    cdef DTYPE_t max_dist(self, ITYPE_t i_node,
+    cdef DTYPE_t max_dist(BinaryTree self, ITYPE_t i_node,
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
         raise NotImplementedError()
 
-    cdef DTYPE_t max_rdist(self, ITYPE_t i_node,
+    cdef DTYPE_t max_rdist(BinaryTree self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
+        raise NotImplementedError()
+
+    cdef DTYPE_t min_dist_dual(BinaryTree self, ITYPE_t i_node1,
+                               BinaryTree other, ITYPE_t i_node2):
+        raise NotImplementedError()
+
+    cdef DTYPE_t min_rdist_dual(BinaryTree self, ITYPE_t i_node1,
+                                BinaryTree other, ITYPE_t i_node2):
+        raise NotImplementedError()
+
+    cdef DTYPE_t max_dist_dual(BinaryTree self, ITYPE_t i_node1,
+                               BinaryTree other, ITYPE_t i_node2):
+        raise NotImplementedError()
+
+    cdef DTYPE_t max_rdist_dual(BinaryTree self, ITYPE_t i_node1,
+                                BinaryTree other, ITYPE_t i_node2):
         raise NotImplementedError()
 
 
 @cython.final
-cdef class BallTree(_BinaryTree):
+cdef class BallTree(BinaryTree):
     """Ball Tree for nearest neighbor queries"""
-    cdef DTYPE_t[:, ::1] centroids_arr
+    #cdef DTYPE_t[:, ::1] centroids_arr
 
-    def __cinit__(self):
-        self.centroids_arr = np.empty((0, 1), dtype=DTYPE, order='C')
+    #def __cinit__(self):
+    #    self.centroids_arr = np.empty((0, 1), dtype=DTYPE, order='C')
 
     def get_arrays(self):
         return map(np.asarray, (self.data, self.idx_array, self.node_data_arr,
@@ -422,7 +604,7 @@ cdef class BallTree(_BinaryTree):
         self.node_data_arr[i_node].idx_start = idx_start
         self.node_data_arr[i_node].idx_end = idx_end
 
-    cdef DTYPE_t min_dist(self, ITYPE_t i_node,
+    cdef DTYPE_t min_dist(BallTree self, ITYPE_t i_node,
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
         cdef DTYPE_t dist_pt
         if self.euclidean:
@@ -431,7 +613,7 @@ cdef class BallTree(_BinaryTree):
             dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
         return fmax(0, dist_pt - self.node_data_arr[i_node].radius)
             
-    cdef DTYPE_t max_dist(self, ITYPE_t i_node,
+    cdef DTYPE_t max_dist(BallTree self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
         cdef DTYPE_t dist_pt
         if self.euclidean:
@@ -440,18 +622,54 @@ cdef class BallTree(_BinaryTree):
             dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
         return dist_pt + self.node_data_arr[i_node].radius
 
-    cdef DTYPE_t min_rdist(self, ITYPE_t i_node,
+    cdef DTYPE_t min_rdist(BallTree self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
         cdef DTYPE_t tmp = self.min_dist(i_node, p, i_p)
         return tmp * tmp
             
-    cdef DTYPE_t max_rdist(self, ITYPE_t i_node,
+    cdef DTYPE_t max_rdist(BallTree self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
         cdef DTYPE_t tmp = self.max_dist(i_node, p, i_p)
         return tmp * tmp
 
+    cdef DTYPE_t min_dist_dual(BallTree self, ITYPE_t i_node1,
+                               BinaryTree other, ITYPE_t i_node2):
+        cdef DTYPE_t dist_pt
+        if self.euclidean:
+            dist_pt = dist(self.centroids_arr, i_node1,
+                           other.centroids_arr, i_node2)
+        else:
+            dist_pt = self.dm.dist(self.centroids_arr, i_node1,
+                                   other.centroids_arr, i_node2)
+        return fmax(0, (dist_pt
+                        - self.node_data_arr[i_node1].radius
+                        - other.node_data_arr[i_node2].radius))
+    
+    cdef DTYPE_t min_rdist_dual(BallTree self, ITYPE_t i_node1,
+                                BinaryTree other, ITYPE_t i_node2):
+        cdef DTYPE_t tmp = self.min_dist_dual(i_node1, other, i_node2)
+        return tmp * tmp
 
-cdef class KDTree(_BinaryTree):
+    cdef DTYPE_t max_dist_dual(BallTree self, ITYPE_t i_node1,
+                               BinaryTree other, ITYPE_t i_node2):
+        cdef DTYPE_t dist_pt
+        if self.euclidean:
+            dist_pt = dist(self.centroids_arr, i_node1,
+                           other.centroids_arr, i_node2)
+        else:
+            dist_pt = self.dm.dist(self.centroids_arr, i_node1,
+                                   other.centroids_arr, i_node2)
+        return (dist_pt
+                + self.node_data_arr[i_node1].radius
+                + other.node_data_arr[i_node2].radius)
+
+    cdef DTYPE_t max_rdist_dual(BallTree self, ITYPE_t i_node1,
+                                BinaryTree other, ITYPE_t i_node2):
+        cdef DTYPE_t tmp = self.max_dist_dual(i_node1, other, i_node2)
+        return tmp * tmp
+
+
+cdef class KDTree(BinaryTree):
     """KD Tree for nearest neighbor queries"""
     cdef DTYPE_t[:, ::1] lower_bounds
     cdef DTYPE_t[:, ::1] upper_bounds
@@ -459,6 +677,15 @@ cdef class KDTree(_BinaryTree):
     def __cinit__(self):
         self.lower_bounds = np.empty((0, 1), dtype=DTYPE, order='C')
         self.upper_bounds = np.empty((0, 1), dtype=DTYPE, order='C')
+
+    def __init__(self, DTYPE_t[:, ::1] data,
+                 leaf_size=20, metric='minkowski', **kwargs):
+        self.dm = Distance(metric, **kwargs)
+        if not self.dm.axis_aligned:
+            raise ValueError('KDTree can only be used for axis-aligned '
+                             'distance metrics.  Use BallTree instead.')
+        BinaryTree.__init__(self, data, leaf_size, metric, **kwargs)
+        
 
     def get_arrays(self):
         return map(np.asarray, (self.data, self.idx_array, self.node_data_arr,

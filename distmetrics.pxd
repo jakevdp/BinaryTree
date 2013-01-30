@@ -7,8 +7,9 @@ from typedefs cimport DTYPE_t, ITYPE_t
 
 
 cdef class DistanceMetric:
-    cdef int n_calls
+    cdef int axis_aligned
     cdef DTYPE_t p
+
     cdef DTYPE_t dist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
                       DTYPE_t[:, ::1] X2, ITYPE_t i2)
     cdef DTYPE_t rdist(self, DTYPE_t[:, ::1] X1, ITYPE_t i1,
@@ -29,4 +30,8 @@ cdef class ManhattanDistance(DistanceMetric):
 
 @cython.final
 cdef class MinkowskiDistance(DistanceMetric):
+    pass
+
+@cython.final
+cdef class ChebyshevDistance(DistanceMetric):
     pass
