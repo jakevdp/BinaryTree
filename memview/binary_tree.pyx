@@ -1,10 +1,10 @@
 #!python
-#cython: boundscheck=True
+#cython: boundscheck=False
 #cython: wraparound=False
 #cython: cdivision=True
 """
 Binary Tree
-===========
+-----------
 This is the Abstract Base Class for the Ball Tree and KD Tree
 """
 import warnings
@@ -18,8 +18,7 @@ cimport cython
 from distmetrics cimport DistanceMetric
 from distmetrics import Distance
 
-from tree_utils cimport\
-    MaxHeap, partition_indices, find_split_dim
+from tree_utils cimport MaxHeap, partition_indices, find_split_dim
 
 #####################################################################
 # global types and variables
@@ -50,7 +49,7 @@ cdef NodeData_t[:] dummy_view = <NodeData_t[:1]> &dummy
 NodeData = np.asarray(dummy_view).dtype
 
 ######################################################################
-# Inline distance function for Euclidean case
+# Fase inline distance function for Euclidean case
 cdef inline DTYPE_t dist(DTYPE_t[:, ::1] X1, ITYPE_t i1,
                          DTYPE_t[:, ::1] X2, ITYPE_t i2):
     cdef ITYPE_t n_features = X1.shape[1]
@@ -75,9 +74,15 @@ cdef inline DTYPE_t rdist(DTYPE_t[:, ::1] X1, ITYPE_t i1,
 cdef class BinaryTree:
     """Abstract base class for binary tree objects"""
     cdef readonly DTYPE_t[:, ::1] data
-    cdef ITYPE_t[::1] idx_array
-    cdef NodeData_t[::1] node_data_arr
-    cdef DTYPE_t[:, ::1] centroids_arr
+    cdef public ITYPE_t[::1] idx_array
+    cdef public NodeData_t[::1] node_data
+
+    # used for BallTree
+    cdef public DTYPE_t[:, ::1] centroids_arr
+
+    # used for KDTree
+    cdef public DTYPE_t[:, ::1] lower_bounds
+    cdef public DTYPE_t[:, ::1] upper_bounds
 
     cdef ITYPE_t leaf_size
     cdef ITYPE_t n_levels
@@ -99,8 +104,11 @@ cdef class BinaryTree:
     def __cinit__(self):
         self.data = np.empty((0, 1), dtype=DTYPE, order='C')
         self.idx_array = np.empty(0, dtype=ITYPE, order='C')
-        self.node_data_arr = np.empty(0, dtype=NodeData, order='C')
-        self.centroids_arr = np.empty((0, 1), dtype=DTYPE, order='C')
+        self.node_data = np.empty(0, dtype=NodeData, order='C')
+        self.centroids_arr = np.empty((0, 1), dtype=DTYPE)
+        self.lower_bounds = np.empty((0, 1), dtype=DTYPE, order='C')
+        self.upper_bounds = np.empty((0, 1), dtype=DTYPE, order='C')
+
         self.leaf_size = 0
         self.n_levels = 0
         self.n_nodes = 0
@@ -113,7 +121,7 @@ cdef class BinaryTree:
             raise NotImplementedError("BinaryTree is an abstract class")
         self.data = data
         self.idx_array = np.arange(data.shape[0], dtype=ITYPE)
-        self.node_data_arr = np.zeros(data.shape[0], dtype=NodeData)
+        self.node_data = np.zeros(data.shape[0], dtype=NodeData)
         self.leaf_size = leaf_size
         self.dm = Distance(metric, **kwargs)
         self.euclidean = (self.dm.__class__.__name__ == 'EuclideanDistance')
@@ -133,7 +141,7 @@ cdef class BinaryTree:
 
         # allocate arrays for storage
         self.idx_array = np.arange(n_samples, dtype=ITYPE)
-        self.node_data_arr = np.zeros(self.n_nodes, dtype=NodeData)
+        self.node_data = np.zeros(self.n_nodes, dtype=NodeData)
 
         # Allocate tree-specific data from TreeBase
         self.allocate_data(self.n_nodes, n_features)        
@@ -149,7 +157,7 @@ cdef class BinaryTree:
         self.n_nodes = (2 ** self.n_levels) - 1
 
     def get_arrays(self):
-        return map(np.asarray, (self.data, self.idx_array, self.node_data_arr))
+        return map(np.asarray, (self.data, self.idx_array, self.node_data))
 
     def get_tree_stats(self):
         return (self.n_trims, self.n_leaves, self.n_splits)
@@ -171,7 +179,7 @@ cdef class BinaryTree:
         self.init_node(i_node, idx_start, idx_end)
 
         if 2 * i_node + 1 >= self.n_nodes:
-            self.node_data_arr[i_node].is_leaf = 1
+            self.node_data[i_node].is_leaf = True
             if idx_end - idx_start > 2 * self.leaf_size:
                 # this shouldn't happen if our memory allocation is correct
                 # we'll proactively prevent memory errors, but raise a warning
@@ -180,15 +188,13 @@ cdef class BinaryTree:
                               "not enough nodes allocated")
 
         elif idx_end - idx_start < 2:
-            # this shouldn't happen if our memory allocation is correct
-            # we'll proactively prevent memory errors, but raise a warning
-            # saying we're doing so.
+            # again, this shouldn't happen if our memory allocation is correct
             warnings.warn("Internal: memory layout is flawed: "
                           "too many nodes allocated")
-            self.node_data_arr[i_node].is_leaf = 1
+            self.node_data[i_node].is_leaf = True
 
         else:  # split node and recursively construct child nodes.
-            self.node_data_arr[i_node].is_leaf = 0
+            self.node_data[i_node].is_leaf = False
             i_max = find_split_dim(self.data, self.idx_array,
                                    idx_start, idx_end)
             partition_indices(self.data, self.idx_array,
@@ -277,12 +283,12 @@ cdef class BinaryTree:
             print other
             reduced_dist_LB = self.min_rdist_dual(0, other, 0)
 
-            bounds = np.inf + np.zeros(other.data.shape[0])
+            bounds = np.inf + np.zeros(other.node_data.shape[0])
 
-            self.query_dual_(0, other, 0,
+            self._query_dual(0, other, 0,
                              distances_arr, indices_arr, bounds,
                              reduced_dist_LB)
-            for i in range(bounds.shape[0]):
+            for i in range(other.data.shape[0]):
                 self.heap.wrap(distances_arr[i], indices_arr[i])
                 self.heap.sort()
 
@@ -302,6 +308,8 @@ cdef class BinaryTree:
         else:
             return indices.reshape((X.shape[:-1]) + (k,))
 
+
+    @cython.boundscheck(False)
     cdef void _query_one(self, ITYPE_t i_node, ITYPE_t i_pt,
                          DTYPE_t[:, ::1] points,
                          DTYPE_t[:, ::1] distances,
@@ -310,7 +318,7 @@ cdef class BinaryTree:
         cdef DTYPE_t[::1] pt = points[i_pt]
         cdef DTYPE_t[::1] dist = distances[i_pt]
         cdef ITYPE_t[::1] ind = indices[i_pt]
-        cdef NodeData_t node_info = self.node_data_arr[i_node]
+        cdef NodeData_t node_info = self.node_data[i_node]
 
         cdef DTYPE_t dist_pt, reduced_dist_LB_1, reduced_dist_LB_2
         cdef ITYPE_t i, i1, i2
@@ -365,15 +373,16 @@ cdef class BinaryTree:
                 self._query_one(i1, i_pt, points, distances, indices,
                                 reduced_dist_LB_1)
 
-    cdef void query_dual_(BinaryTree self, ITYPE_t i_node1,
+    @cython.boundscheck(False)
+    cdef void _query_dual(BinaryTree self, ITYPE_t i_node1,
                           BinaryTree other, ITYPE_t i_node2,
                           DTYPE_t[:, ::1] distances,
                           ITYPE_t[:, ::1] indices,
                           DTYPE_t[::1] bounds,
                           DTYPE_t reduced_dist_LB):
         cdef ITYPE_t n_features = self.data.shape[1]
-        cdef NodeData_t node_info1 = self.node_data_arr[i_node1]
-        cdef NodeData_t node_info2 = self.node_data_arr[i_node2]
+        cdef NodeData_t node_info1 = self.node_data[i_node1]
+        cdef NodeData_t node_info2 = other.node_data[i_node2]
 
         cdef DTYPE_t dist_pt, reduced_dist_LB_1, reduced_dist_LB_2
         cdef ITYPE_t i, i1, i2
@@ -407,7 +416,7 @@ cdef class BinaryTree:
                 bounds[i_node2] = fmax(bounds[i_node2], self.heap.largest())
             
         #------------------------------------------------------------
-        # Case 3a: node 1 is a leaf: split node 2 and recursively
+        # Case 3a: only node 1 is a leaf: split node 2 and recursively
         #          query, starting with the nearest node
         elif node_info1.is_leaf:
             reduced_dist_LB_1 = self.min_rdist_dual(i_node1,
@@ -416,17 +425,17 @@ cdef class BinaryTree:
                                                     other, 2 * i_node2 + 2)
 
             if reduced_dist_LB_1 < reduced_dist_LB_2:
-                self.query_dual_(i_node1, other, 2 * i_node2 + 1,
+                self._query_dual(i_node1, other, 2 * i_node2 + 1,
                                  distances, indices, bounds,
                                  reduced_dist_LB_1)
-                self.query_dual_(i_node1, other, 2 * i_node2 + 2,
+                self._query_dual(i_node1, other, 2 * i_node2 + 2,
                                  distances, indices, bounds,
                                  reduced_dist_LB_2)
             else:
-                self.query_dual_(i_node1, other, 2 * i_node2 + 2,
+                self._query_dual(i_node1, other, 2 * i_node2 + 2,
                                  distances, indices, bounds,
                                  reduced_dist_LB_2)
-                self.query_dual_(i_node1, other, 2 * i_node2 + 1,
+                self._query_dual(i_node1, other, 2 * i_node2 + 1,
                                  distances, indices, bounds,
                                  reduced_dist_LB_1)
             
@@ -435,7 +444,7 @@ cdef class BinaryTree:
                                    bounds[2 * i_node2 + 2])
             
         #------------------------------------------------------------
-        # Case 3b: node 2 is a leaf: split node 1 and recursively
+        # Case 3b: only node 2 is a leaf: split node 1 and recursively
         #          query, starting with the nearest node
         elif node_info2.is_leaf:
             reduced_dist_LB_1 = self.min_rdist_dual(2 * i_node1 + 1,
@@ -444,17 +453,17 @@ cdef class BinaryTree:
                                                     other, i_node2)
 
             if reduced_dist_LB_1 < reduced_dist_LB_2:
-                self.query_dual_(2 * i_node1 + 1, other, i_node2,
+                self._query_dual(2 * i_node1 + 1, other, i_node2,
                                  distances, indices, bounds,
                                  reduced_dist_LB_1)
-                self.query_dual_(2 * i_node1 + 2, other, i_node2,
+                self._query_dual(2 * i_node1 + 2, other, i_node2,
                                  distances, indices, bounds,
                                  reduced_dist_LB_2)
             else:
-                self.query_dual_(2 * i_node1 + 2, other, i_node2,
+                self._query_dual(2 * i_node1 + 2, other, i_node2,
                                  distances, indices, bounds,
                                  reduced_dist_LB_2)
-                self.query_dual_(2 * i_node1 + 1, other, i_node2,
+                self._query_dual(2 * i_node1 + 1, other, i_node2,
                                  distances, indices, bounds,
                                  reduced_dist_LB_1)
         
@@ -468,17 +477,17 @@ cdef class BinaryTree:
                                                     other, 2 * i_node2 + 1)
 
             if reduced_dist_LB_1 < reduced_dist_LB_2:
-                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 1,
+                self._query_dual(2 * i_node1 + 1, other, 2 * i_node2 + 1,
                                  distances, indices, bounds,
                                  reduced_dist_LB_1)
-                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 1,
+                self._query_dual(2 * i_node1 + 2, other, 2 * i_node2 + 1,
                                  distances, indices, bounds,
                                  reduced_dist_LB_2)
             else:
-                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 1,
+                self._query_dual(2 * i_node1 + 2, other, 2 * i_node2 + 1,
                                  distances, indices, bounds,
                                  reduced_dist_LB_2)
-                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 1,
+                self._query_dual(2 * i_node1 + 1, other, 2 * i_node2 + 1,
                                  distances, indices, bounds,
                                  reduced_dist_LB_1)
 
@@ -487,17 +496,17 @@ cdef class BinaryTree:
             reduced_dist_LB_2 = self.min_rdist_dual(2 * i_node1 + 2,
                                                     other, 2 * i_node2 + 2)
             if reduced_dist_LB_1 < reduced_dist_LB_2:
-                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 2,
+                self._query_dual(2 * i_node1 + 1, other, 2 * i_node2 + 2,
                                  distances, indices, bounds,
                                  reduced_dist_LB_1)
-                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 2,
+                self._query_dual(2 * i_node1 + 2, other, 2 * i_node2 + 2,
                                  distances, indices, bounds,
                                  reduced_dist_LB_2)
             else:
-                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 2,
+                self._query_dual(2 * i_node1 + 2, other, 2 * i_node2 + 2,
                                  distances, indices, bounds,
                                  reduced_dist_LB_2)
-                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 2,
+                self._query_dual(2 * i_node1 + 1, other, 2 * i_node2 + 2,
                                  distances, indices, bounds,
                                  reduced_dist_LB_1)
             
@@ -553,13 +562,8 @@ cdef class BinaryTree:
 @cython.final
 cdef class BallTree(BinaryTree):
     """Ball Tree for nearest neighbor queries"""
-    #cdef DTYPE_t[:, ::1] centroids_arr
-
-    #def __cinit__(self):
-    #    self.centroids_arr = np.empty((0, 1), dtype=DTYPE, order='C')
-
     def get_arrays(self):
-        return map(np.asarray, (self.data, self.idx_array, self.node_data_arr,
+        return map(np.asarray, (self.data, self.idx_array, self.node_data,
                                 self.centroids_arr))
 
     cdef void allocate_data(self, ITYPE_t n_nodes, ITYPE_t n_features):
@@ -600,9 +604,9 @@ cdef class BallTree(BinaryTree):
                               self.dm.dist(self.centroids_arr, i_node, 
                                            self.data, self.idx_array[i]))
 
-        self.node_data_arr[i_node].radius = radius
-        self.node_data_arr[i_node].idx_start = idx_start
-        self.node_data_arr[i_node].idx_end = idx_end
+        self.node_data[i_node].radius = radius
+        self.node_data[i_node].idx_start = idx_start
+        self.node_data[i_node].idx_end = idx_end
 
     cdef DTYPE_t min_dist(BallTree self, ITYPE_t i_node,
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):
@@ -611,7 +615,7 @@ cdef class BallTree(BinaryTree):
             dist_pt = dist(p, i_p, self.centroids_arr, i_node)
         else:
             dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
-        return fmax(0, dist_pt - self.node_data_arr[i_node].radius)
+        return fmax(0, dist_pt - self.node_data[i_node].radius)
             
     cdef DTYPE_t max_dist(BallTree self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
@@ -620,7 +624,7 @@ cdef class BallTree(BinaryTree):
             dist_pt = dist(p, i_p, self.centroids_arr, i_node)
         else:
             dist_pt = self.dm.dist(p, i_p, self.centroids_arr, i_node)
-        return dist_pt + self.node_data_arr[i_node].radius
+        return dist_pt + self.node_data[i_node].radius
 
     cdef DTYPE_t min_rdist(BallTree self, ITYPE_t i_node,
                            DTYPE_t[:, ::1] p, ITYPE_t i_p):
@@ -642,8 +646,8 @@ cdef class BallTree(BinaryTree):
             dist_pt = self.dm.dist(self.centroids_arr, i_node1,
                                    other.centroids_arr, i_node2)
         return fmax(0, (dist_pt
-                        - self.node_data_arr[i_node1].radius
-                        - other.node_data_arr[i_node2].radius))
+                        - self.node_data[i_node1].radius
+                        - other.node_data[i_node2].radius))
     
     cdef DTYPE_t min_rdist_dual(BallTree self, ITYPE_t i_node1,
                                 BinaryTree other, ITYPE_t i_node2):
@@ -660,8 +664,8 @@ cdef class BallTree(BinaryTree):
             dist_pt = self.dm.dist(self.centroids_arr, i_node1,
                                    other.centroids_arr, i_node2)
         return (dist_pt
-                + self.node_data_arr[i_node1].radius
-                + other.node_data_arr[i_node2].radius)
+                + self.node_data[i_node1].radius
+                + other.node_data[i_node2].radius)
 
     cdef DTYPE_t max_rdist_dual(BallTree self, ITYPE_t i_node1,
                                 BinaryTree other, ITYPE_t i_node2):
@@ -671,13 +675,6 @@ cdef class BallTree(BinaryTree):
 
 cdef class KDTree(BinaryTree):
     """KD Tree for nearest neighbor queries"""
-    cdef DTYPE_t[:, ::1] lower_bounds
-    cdef DTYPE_t[:, ::1] upper_bounds
-
-    def __cinit__(self):
-        self.lower_bounds = np.empty((0, 1), dtype=DTYPE, order='C')
-        self.upper_bounds = np.empty((0, 1), dtype=DTYPE, order='C')
-
     def __init__(self, DTYPE_t[:, ::1] data,
                  leaf_size=20, metric='minkowski', **kwargs):
         self.dm = Distance(metric, **kwargs)
@@ -688,7 +685,7 @@ cdef class KDTree(BinaryTree):
         
 
     def get_arrays(self):
-        return map(np.asarray, (self.data, self.idx_array, self.node_data_arr,
+        return map(np.asarray, (self.data, self.idx_array, self.node_data,
                                 self.lower_bounds, self.upper_bounds))
 
     cdef void allocate_data(self, ITYPE_t n_nodes, ITYPE_t n_features):
@@ -717,8 +714,8 @@ cdef class KDTree(BinaryTree):
                     fmax(self.upper_bounds[i_node, j],
                          self.data[idx_i, j])
 
-        self.node_data_arr[i_node].idx_start = idx_start
-        self.node_data_arr[i_node].idx_end = idx_end
+        self.node_data[i_node].idx_start = idx_start
+        self.node_data[i_node].idx_end = idx_end
 
     cdef DTYPE_t min_rdist(self, ITYPE_t i_node,
                           DTYPE_t[:, ::1] p, ITYPE_t i_p):

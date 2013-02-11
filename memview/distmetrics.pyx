@@ -2,6 +2,10 @@
 #cython: boundscheck=False
 #cython: wraparound=False
 #cython: cdivision=True
+"""
+Distance Metrics
+----------------
+"""
 import numpy as np
 from typedefs import ITYPE, DTYPE
 

@@ -42,8 +42,7 @@ cdef class MaxHeap:
             raise ValueError("val and idx shapes should match")
 
     cpdef push(self, DTYPE_t val, ITYPE_t i_val):
-        cdef ITYPE_t i, ic1, ic2, i_tmp
-        cdef DTYPE_t d_tmp
+        cdef ITYPE_t i, ic1, ic2, i_swap
 
         # check if val is larger than the current largest
         if val > self.val[0]:
