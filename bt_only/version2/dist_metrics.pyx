@@ -133,6 +133,8 @@ cdef class EuclideanDistance(DistanceMetric):
     def dist_to_rdist(self, dist):
         return dist ** 2
 
+############################################################
+# python access functions, used for benchmarking
 
 def euclidean_pairwise(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
     D = euclidean_cdist(X, Y)
