@@ -1,0 +1,2 @@
+version1 : use typed memoryviews whenever possible
+version2 : use raw pointers in the bottlenecks

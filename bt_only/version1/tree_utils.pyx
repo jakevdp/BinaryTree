@@ -31,12 +31,14 @@ cdef DTYPE_t ddummy
 cdef DTYPE_t[:] ddummy_view = <DTYPE_t[:1]> &ddummy
 DTYPE = np.asarray(ddummy_view).dtype
 
+
 ############################################################
 # Utility routines
-cdef inline void swap(DITYPE_t* arr, ITYPE_t i1, ITYPE_t i2):
-    cdef DITYPE_t tmp = arr[i1]
-    arr[i1] = arr[i2]
-    arr[i2] = tmp
+cdef inline void swap(DITYPE_t[:, ::1] arr, ITYPE_t row,
+                      ITYPE_t i1, ITYPE_t i2):
+    cdef DITYPE_t tmp = arr[row, i1]
+    arr[row, i1] = arr[row, i2]
+    arr[row, i2] = tmp
 
 
 #############################################################
@@ -54,59 +56,60 @@ cdef class NeighborsHeap:
         self.indices = np.zeros((n_pts, n_nbrs), dtype=ITYPE)
 
     cpdef push(self, ITYPE_t row, DTYPE_t val, ITYPE_t i_val):
-        cdef ITYPE_t i, ic1, ic2, i_swap
-        cdef ITYPE_t size = self.distances.shape[1]
-        cdef DTYPE_t* dist_arr = &self.distances[row, 0]
-        cdef ITYPE_t* ind_arr = &self.indices[row, 0]
+        cdef DTYPE_t[:, ::1] distances = self.distances
+        cdef ITYPE_t[:, ::1] indices = self.indices
+        cdef ITYPE_t i, child1, child2, i_swap
 
-        # check if val should be in heap
-        if val > dist_arr[0]:
+        if (row < 0) or (row >= distances.shape[0]):
+            raise ValueError("row out of range")
+
+        # if val is larger than the current largest, we end here
+        if val >= distances[row, 0]:
             return
 
         # insert val at position zero
-        dist_arr[0] = val
-        ind_arr[0] = i_val
+        distances[row, 0] = val
+        indices[row, 0] = i_val
 
         #descend the heap, swapping values until the max heap criterion is met
         i = 0
         while True:
-            ic1 = 2 * i + 1
-            ic2 = ic1 + 1
+            child1 = 2 * i + 1
+            child2 = child1 + 1
 
-            if ic1 >= size:
+            if child1 >= distances.shape[1]:
                 break
-            elif ic2 >= size:
-                if dist_arr[ic1] > val:
-                    i_swap = ic1
+            elif child2 >= distances.shape[1]:
+                if distances[row, child1] > val:
+                    i_swap = child1
                 else:
                     break
-            elif dist_arr[ic1] >= dist_arr[ic2]:
-                if val < dist_arr[ic1]:
-                    i_swap = ic1
+            elif distances[row, child1] >= distances[row, child2]:
+                if val < distances[row, child1]:
+                    i_swap = child1
                 else:
                     break
             else:
-                if val < dist_arr[ic2]:
-                    i_swap = ic2
+                if val < distances[row, child2]:
+                    i_swap = child2
                 else:
                     break
 
-            dist_arr[i] = dist_arr[i_swap]
-            ind_arr[i] = ind_arr[i_swap]
+            distances[row, i] = distances[row, i_swap]
+            indices[row, i] = indices[row, i_swap]
 
             i = i_swap
 
-        dist_arr[i] = val
-        ind_arr[i] = i_val
+        distances[row, i] = val
+        indices[row, i] = i_val
 
     cdef _sort(self):
         cdef DTYPE_t[:, ::1] distances = self.distances
         cdef ITYPE_t[:, ::1] indices = self.indices
         cdef ITYPE_t row
         for row in range(distances.shape[0]):
-            _simultaneous_sort(&distances[row, 0],
-                               &indices[row, 0],
-                               distances.shape[1])
+            _simultaneous_sort(distances, indices, row,
+                               0, distances.shape[1])
 
     def get_arrays(self, sort=True):
         if sort:
@@ -115,44 +118,44 @@ cdef class NeighborsHeap:
 
 
 ######################################################################
-# _simultaneous_sort :
-#  this is a recursive quicksort implementation which sorts `dist` and
-#  simultaneously performs the same swaps on `idx`.
-cdef void _simultaneous_sort(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t size):
-    cdef ITYPE_t pivot_idx, store_idx, i
-    cdef DTYPE_t pivot_val
-
-    if size <= 1:
+# simultaneous_sort :
+#  this is a recursive quicksort implementation which sorts `distances`
+#  and simultaneously performs the same swaps on `indices`.
+cdef void _simultaneous_sort(DTYPE_t[:, ::1] distances,
+                             ITYPE_t[:, ::1] indices,
+                             ITYPE_t row, ITYPE_t lower, ITYPE_t upper):
+    # recursive in-place quicksort of the vector distances[row, lower:upper],
+    # simultaneously performing the same swaps on the indices array.
+    if lower + 1 >= upper:
         return
 
+    cdef DTYPE_t pivot_val
+    cdef ITYPE_t pivot_idx, store_idx, i
+
     # determine new pivot
-    pivot_idx = size / 2
-    pivot_val = dist[pivot_idx]
-    store_idx = 0
-
-    swap(dist, pivot_idx, size - 1)
-    swap(idx, pivot_idx, size - 1)
-
-    for i in range(size - 1):
-        if dist[i] < pivot_val:
-            swap(dist, i, store_idx)
-            swap(idx, i, store_idx)
+    pivot_idx = (lower + upper) / 2
+    pivot_val = distances[row, pivot_idx]
+    store_idx = lower
+    swap(distances, row, pivot_idx, upper - 1)
+    swap(indices, row, pivot_idx, upper - 1)
+    for i in range(lower, upper - 1):
+        if distances[row, i] < pivot_val:
+            swap(distances, row, i, store_idx)
+            swap(indices, row, i, store_idx)
             store_idx += 1
-    swap(dist, store_idx, size - 1)
-    swap(idx, store_idx, size - 1)
+    swap(distances, row, store_idx, upper - 1)
+    swap(indices, row, store_idx, upper - 1)
     pivot_idx = store_idx
 
     # recursively sort each side of the pivot
-    if pivot_idx > 1:
-        _simultaneous_sort(dist, idx, pivot_idx)
-    if pivot_idx + 2 < size:
-        _simultaneous_sort(dist + pivot_idx + 1,
-                           idx + pivot_idx + 1,
-                           size - pivot_idx - 1)
+    if lower + 1 < pivot_idx:
+        _simultaneous_sort(distances, indices, row, lower, pivot_idx)
+    if pivot_idx + 2 < upper:
+        _simultaneous_sort(distances, indices, row, pivot_idx + 1, upper)
 
 
 ############################################################
-# Python access functions - used for testing
+# Python access functions for benchmarking
 
 def load_heap(DTYPE_t[:, ::1] X, ITYPE_t k):
     """test fully loading the heap"""
@@ -163,18 +166,13 @@ def load_heap(DTYPE_t[:, ::1] X, ITYPE_t k):
         for j in range(X.shape[1]):
             heap.push(i, X[i, j], j)
     return heap.get_arrays()
-
+            
 
 def simultaneous_sort(DTYPE_t[:, ::1] distances, ITYPE_t[:, ::1] indices):
-    """In-place simultaneous sort the given row of the arrays
-    
-    This python wrapper exists primarily to enable unit testing
-    of the _simultaneous_sort C routine.
-    """
+    """In-place simultaneous sort the given row of the arrays"""
     assert distances.shape[0] == indices.shape[0]
     assert distances.shape[1] == indices.shape[1]
+
     cdef ITYPE_t row
     for row in range(distances.shape[0]):
-        _simultaneous_sort(&distances[row, 0],
-                           &indices[row, 0],
-                           distances.shape[1])
+        _simultaneous_sort(distances, indices, row, 0, distances.shape[1])

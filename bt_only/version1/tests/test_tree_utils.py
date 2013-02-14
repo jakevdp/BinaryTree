@@ -1,6 +1,6 @@
 import numpy as np
 from numpy.testing import assert_allclose, assert_
-from tree_utils_1 import NeighborsHeap, simultaneous_sort, DTYPE, ITYPE
+from version1.tree_utils import NeighborsHeap, simultaneous_sort, DTYPE, ITYPE
 
 def test_neighbors_heap(n_pts=5, n_nbrs=10):
     heap = NeighborsHeap(n_pts, n_nbrs)

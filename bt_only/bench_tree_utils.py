@@ -1,9 +1,9 @@
 from time import time
 import numpy as np
-import tree_utils_1
-import tree_utils_2
-import dist_metrics_1
-import dist_metrics_2
+import version1.tree_utils as tree_utils_1
+import version2.tree_utils as tree_utils_2
+import version1.dist_metrics as dist_metrics_1
+import version2.dist_metrics as dist_metrics_2
 
 DTYPE = tree_utils_1.DTYPE
 ITYPE = tree_utils_2.ITYPE
