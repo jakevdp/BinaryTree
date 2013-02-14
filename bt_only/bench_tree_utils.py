@@ -72,32 +72,35 @@ def bench_euclidean_dist(n1=1000, n2=1100, d=3):
     eucl_1 = dist_metrics_1.EuclideanDistance()
     eucl_2 = dist_metrics_2.EuclideanDistance()
     
-    t0 = time()
-    D1 = dist_metrics_1.euclidean_pairwise(X, Y)
-    t1 = time()
-    D2 = dist_metrics_1.euclidean_pairwise_class(X, Y)
-    t2 = time()
-    D3 = eucl_1.pairwise(X, Y)
-    t3 = time()
-    D4 = dist_metrics_2.euclidean_pairwise(X, Y)
-    t4 = time()
-    D5 = dist_metrics_2.euclidean_pairwise_class(X, Y)
-    t5 = time()
-    D6 = eucl_2.pairwise(X, Y)
-    t6 = time()
+    t = []
+    D = []
+    for func in [dist_metrics_1.euclidean_pairwise,
+                 dist_metrics_1.euclidean_pairwise_class,
+                 dist_metrics_1.euclidean_pairwise_polymorph,
+                 eucl_1.pairwise,
+                 dist_metrics_2.euclidean_pairwise,
+                 dist_metrics_2.euclidean_pairwise_class,
+                 dist_metrics_2.euclidean_pairwise_polymorph,
+                 eucl_2.pairwise]:
+        t0 = time()
+        Di = func(X, Y)
+        t1 = time()
 
-    print("   memview/inline: %.2g sec" % (t1 - t0))
-    print("   memview/class/inline: %.2g sec" % (t2 - t1))
-    print("   memview/class/not inline:  %.2g sec" % (t3 - t2))
-    print("   pointer/inline: %.2g sec" % (t4 - t3))
-    print("   pointer/class/inline: %.2g sec" % (t5 - t4))
-    print("   pointer/class/not inline:  %.2g sec" % (t6 - t5))
-    print("   results match: (%s, %s, %s, %s, %s)\n"
-          % (np.allclose(D1, D2),
-             np.allclose(D2, D3),
-             np.allclose(D3, D4),
-             np.allclose(D4, D5),
-             np.allclose(D5, D6)))
+        D.append(Di)
+        t.append(t1 - t0)
+
+    print("   memview/inline: %.2g sec" % t[0])
+    print("   memview/class/inline/direct: %.2g sec" % t[1])
+    print("   memview/class/inline/polymorph: %.2g sec" % t[2])
+    print("   memview/class/not inline:  %.2g sec" % t[3])
+    print('')
+    print("   pointers/inline: %.2g sec" % t[4])
+    print("   pointers/class/inline/direct: %.2g sec" % t[5])
+    print("   pointers/class/inline/polymorph: %.2g sec" % t[6])
+    print("   pointers/class/not inline:  %.2g sec" % t[7])
+    print("   results match: (%s)\n" % ', '.join(
+            ['%s' % np.allclose(D[i], D[i + 1])
+             for i in range(len(D) - 1)]))
 
 
 if __name__ == '__main__':
