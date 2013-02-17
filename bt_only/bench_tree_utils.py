@@ -1,12 +1,15 @@
 from time import time
 import numpy as np
-import version1.tree_utils as tree_utils_1
-import version2.tree_utils as tree_utils_2
-import version1.dist_metrics as dist_metrics_1
-import version2.dist_metrics as dist_metrics_2
+import ball_tree_v1
+import ball_tree_v2
+#import version1.tree_utils as tree_utils_1
+#import version2.tree_utils as tree_utils_2
+#import version1.dist_metrics as dist_metrics_1
+#import version2.dist_metrics as dist_metrics_2
+#import version1.import_test as import_test_1
 
-DTYPE = tree_utils_1.DTYPE
-ITYPE = tree_utils_2.ITYPE
+DTYPE = ball_tree_v1.DTYPE
+ITYPE = ball_tree_v1.ITYPE
 
 
 def simul_sort_numpy(dist, ind):
@@ -29,9 +32,9 @@ def bench_simultaneous_sort(n_rows=2000, n_pts=21):
     t0 = time()
     dist1, ind1 = simul_sort_numpy(dist1, ind1)  # note: not an in-place sort
     t1 = time()
-    tree_utils_1.simultaneous_sort(dist2, ind2)
+    ball_tree_v1.simultaneous_sort(dist2, ind2)
     t2 = time()
-    tree_utils_2.simultaneous_sort(dist3, ind3)
+    ball_tree_v2.simultaneous_sort(dist3, ind3)
     t3 = time()
 
     print("   numpy:    %.2g sec" % (t1 - t0))
@@ -51,9 +54,9 @@ def bench_neighbors_heap(n_rows=1000, n_pts=200, n_nbrs=21):
     I0 = np.argsort(X, 1)[:, :n_nbrs]
     D0 = X[np.arange(X.shape[0])[:, None], I0]
     t1 = time()
-    D1, I1 = tree_utils_1.load_heap(X, n_nbrs)
+    D1, I1 = ball_tree_v1.load_heap(X, n_nbrs)
     t2 = time()
-    D2, I2 = tree_utils_2.load_heap(X, n_nbrs)
+    D2, I2 = ball_tree_v2.load_heap(X, n_nbrs)
     t3 = time()
 
     print("   memviews: %.2g sec" % (t2 - t1))
@@ -69,38 +72,39 @@ def bench_euclidean_dist(n1=1000, n2=1100, d=3):
     X = np.random.random((n1, d)).astype(DTYPE)
     Y = np.random.random((n2, d)).astype(DTYPE)
 
-    eucl_1 = dist_metrics_1.EuclideanDistance()
-    eucl_2 = dist_metrics_2.EuclideanDistance()
+    eucl_1 = ball_tree_v1.EuclideanDistance()
+    eucl_2 = ball_tree_v2.EuclideanDistance()
     
-    t = []
+    funcs = [ball_tree_v1.euclidean_pairwise_inline,
+             ball_tree_v1.euclidean_pairwise_class,
+             ball_tree_v1.euclidean_pairwise_polymorphic,
+             eucl_1.pairwise,
+             ball_tree_v2.euclidean_pairwise_inline,
+             ball_tree_v2.euclidean_pairwise_class,
+             ball_tree_v2.euclidean_pairwise_polymorphic,
+             eucl_2.pairwise]
+
+    labels = ["memview/inline",
+              "memview/class/direct",
+              "memview/class/polymorphic",
+              "memview/class/member func",
+              "raw ptrs/inline",
+              "raw ptrs/class/direct",
+              "raw ptrs/class/polymorphic",
+              "raw ptrs/class/member func"]
+
     D = []
-    for func in [dist_metrics_1.euclidean_pairwise,
-                 dist_metrics_1.euclidean_pairwise_class,
-                 dist_metrics_1.euclidean_pairwise_polymorph,
-                 eucl_1.pairwise,
-                 dist_metrics_2.euclidean_pairwise,
-                 dist_metrics_2.euclidean_pairwise_class,
-                 dist_metrics_2.euclidean_pairwise_polymorph,
-                 eucl_2.pairwise]:
+    for func, label in zip(funcs, labels):
         t0 = time()
         Di = func(X, Y)
         t1 = time()
 
         D.append(Di)
-        t.append(t1 - t0)
+        print("   %s: %.2g sec" % (label, t1 - t0))
 
-    print("   memview/inline: %.2g sec" % t[0])
-    print("   memview/class/inline/direct: %.2g sec" % t[1])
-    print("   memview/class/inline/polymorph: %.2g sec" % t[2])
-    print("   memview/class/not inline:  %.2g sec" % t[3])
-    print('')
-    print("   pointers/inline: %.2g sec" % t[4])
-    print("   pointers/class/inline/direct: %.2g sec" % t[5])
-    print("   pointers/class/inline/polymorph: %.2g sec" % t[6])
-    print("   pointers/class/not inline:  %.2g sec" % t[7])
-    print("   results match: (%s)\n" % ', '.join(
-            ['%s' % np.allclose(D[i], D[i + 1])
-             for i in range(len(D) - 1)]))
+    print("   results match: (%s)\n"
+          % ', '.join(['%s' % np.allclose(D[i - 1], D[i])
+                       for i in range(len(D))]))
 
 
 if __name__ == '__main__':
