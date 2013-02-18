@@ -2,11 +2,7 @@ from time import time
 import numpy as np
 import ball_tree_v1
 import ball_tree_v2
-#import version1.tree_utils as tree_utils_1
-#import version2.tree_utils as tree_utils_2
-#import version1.dist_metrics as dist_metrics_1
-#import version2.dist_metrics as dist_metrics_2
-#import version1.import_test as import_test_1
+from sklearn.neighbors import BallTree as skBallTree
 
 DTYPE = ball_tree_v1.DTYPE
 ITYPE = ball_tree_v1.ITYPE
@@ -106,8 +102,28 @@ def bench_euclidean_dist(n1=1000, n2=1100, d=3):
           % ', '.join(['%s' % np.allclose(D[i - 1], D[i])
                        for i in range(len(D))]))
 
+def bench_ball_tree(N=1000, D=5, k=15):
+    print("Ball Tree")
+    X = np.random.random((N, D)).astype(DTYPE)
+
+    btskl = skBallTree(X, leaf_size=20)
+    bt1 = ball_tree_v1.BallTree(X, leaf_size=20)
+
+    t0 = time()
+    Dskl, Iskl = btskl.query(X, k)
+    t1 = time()
+    D1, I1 = bt1.query(X, k)
+    t2 = time()
+
+    print("  sklearn : %.2g sec" % (t1 - t0))
+    print("  memview : %.2g sec" % (t2 - t1))
+    print
+    print(" distances match: %s" % np.allclose(D1, Dskl))
+    print(" indices match:   %s" % np.allclose(I1, Iskl))
+
 
 if __name__ == '__main__':
     bench_simultaneous_sort()
     bench_neighbors_heap()
     bench_euclidean_dist()
+    bench_ball_tree()

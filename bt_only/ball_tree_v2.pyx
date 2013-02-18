@@ -9,7 +9,7 @@ from libc.math cimport fmax, fmin, fabs, sqrt
 import numpy as np
 
 ######################################################################
-# Define types used below
+# Define types
 
 # Floating point/data type
 ctypedef np.float64_t DTYPE_t
