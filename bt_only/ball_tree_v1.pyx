@@ -43,6 +43,14 @@ cdef inline DTYPE_t euclidean_dist(DTYPE_t[:, ::1] X1, ITYPE_t i1,
         d += tmp * tmp
     return sqrt(d)
 
+cdef inline DTYPE_t euclidean_rdist(DTYPE_t[:, ::1] X1, ITYPE_t i1,
+                                    DTYPE_t[:, ::1] X2, ITYPE_t i2):
+    cdef DTYPE_t tmp, d=0
+    for j in range(X1.shape[1]):
+        tmp = X1[i1, j] - X2[i2, j]
+        d += tmp * tmp
+    return d
+
 cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
     if X.shape[1] != Y.shape[1]:
         raise ValueError('X and Y must have the same second dimension')

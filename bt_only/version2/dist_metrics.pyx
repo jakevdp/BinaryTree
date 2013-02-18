@@ -89,9 +89,6 @@ cdef class DistanceMetric:
 ############################################################
 # Specializations of distance metrics
 cdef class EuclideanDistance(DistanceMetric):
-    def __init__(self):
-        pass
-
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef DTYPE_t tmp, d=0
         for j in range(size):

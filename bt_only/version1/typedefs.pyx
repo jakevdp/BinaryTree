@@ -1,5 +1,6 @@
 #!python
 import numpy as np
+from typedefs cimport DTYPE_t, ITYPE_t
 
 ############################################################
 # Define python types associated with C-types in typedefs.pxd
