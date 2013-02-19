@@ -113,19 +113,30 @@ def bench_ball_tree(N=1000, D=5, k=15):
     t0 = time()
     Dskl, Iskl = btskl.query(X, k)
     t1 = time()
-    D1, I1 = bt1.query(X, k)
+    D1, I1 = bt1.query(X, k, dualtree=False)
     t2 = time()
-    D2, I2 = bt2.query(X, k)
+    D2, I2 = bt1.query(X, k, dualtree=True)
     t3 = time()
+    D3, I3 = bt2.query(X, k, dualtree=False)
+    t4 = time()
+    D4, I4 = bt2.query(X, k, dualtree=True)
+    t5 = time()
 
-    print("  sklearn : %.2g sec" % (t1 - t0))
-    print("  memview : %.2g sec" % (t2 - t1))
-    print("  pointer : %.2g sec" % (t3 - t2))
+    dist = [Dskl, D1, D2, D3, D4]
+    ind  = [Iskl, I1, I2, I3, I4]
+
+    print("  sklearn        : %.2g sec" % (t1 - t0))
+    print("  memview/single : %.2g sec" % (t2 - t1))
+    print("  memview/dual   : %.2g sec" % (t3 - t2))
+    print("  pointer/single : %.2g sec" % (t4 - t3))
+    print("  pointer/dual   : %.2g sec" % (t5 - t4))
     print
-    print(" distances match: (%s, %s)" % (np.allclose(D1, Dskl),
-                                          np.allclose(D2, D1)))
-    print(" indices match:   (%s, %s)" % (np.allclose(I1, Iskl),
-                                          np.allclose(I2, I1)))
+    print(" distances match: %s"
+          % ', '.join(['%s' % np.allclose(dist[i - 1], dist[i])
+                       for i in range(len(dist))]))
+    print(" indices match: %s"
+          % ', '.join(['%s' % np.allclose(ind[i - 1], ind[i])
+                       for i in range(len(ind))]))
 
 
 if __name__ == '__main__':

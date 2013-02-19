@@ -113,10 +113,16 @@ cdef class DistanceMetric:
                 D[i1, i2] = self.dist(&X[i1, 0], &Y[i2, 0], X.shape[1])
         return D
 
-    def rdist_to_dist(self, rdist):
+    cdef DTYPE_t rdist_to_dist(self, DTYPE_t rdist):
         return rdist
 
-    def dist_to_rdist(self, dist):
+    cdef DTYPE_t dist_to_rdist(self, DTYPE_t dist):
+        return dist
+
+    def rdist_to_dist_arr(self, rdist):
+        return rdist
+
+    def dist_to_rdist_arr(self, dist):
         return dist
 
     def pairwise(self, X, Y=None):
@@ -146,10 +152,16 @@ cdef class EuclideanDistance(DistanceMetric):
             d += tmp * tmp
         return d
 
-    def rdist_to_dist(self, rdist):
+    cdef inline DTYPE_t rdist_to_dist(self, DTYPE_t rdist):
+        return sqrt(rdist)
+
+    cdef inline DTYPE_t dist_to_rdist(self, DTYPE_t dist):
+        return dist * dist
+
+    def rdist_to_dist_arr(self, rdist):
         return np.sqrt(rdist)
 
-    def dist_to_rdist(self, dist):
+    def dist_to_rdist_arr(self, dist):
         return dist ** 2
 
 
@@ -174,6 +186,11 @@ cdef class NeighborsHeap:
     def __init__(self, n_pts, n_nbrs):
         self.distances = np.zeros((n_pts, n_nbrs), dtype=DTYPE) + np.inf
         self.indices = np.zeros((n_pts, n_nbrs), dtype=ITYPE)
+
+    def get_arrays(self, sort=True):
+        if sort:
+            self._sort()
+        return map(np.asarray, (self.distances, self.indices))
 
     cdef inline DTYPE_t largest(self, ITYPE_t row):
         return self.distances[row, 0]
@@ -232,11 +249,6 @@ cdef class NeighborsHeap:
             _simultaneous_sort(&distances[row, 0],
                                &indices[row, 0],
                                distances.shape[1])
-
-    def get_arrays(self, sort=True):
-        if sort:
-            self._sort()
-        return map(np.asarray, (self.distances, self.indices))
 
 
 #------------------------------------------------------------
@@ -423,14 +435,25 @@ cdef class BallTree:
     def get_tree_stats(self):
         return (self.n_trims, self.n_leaves, self.n_splits)
 
-    def get_node_data(self):
-        return np.asarray(self.node_data)
-
     def reset_n_calls(self):
         self.n_calls = 0
 
     def get_n_calls(self):
         return self.n_calls
+
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2,
+                             ITYPE_t size):
+        if self.euclidean:
+            return euclidean_dist(x1, x2, size)
+        else:
+            return self.dm.dist(x1, x2, size)
+
+    cdef inline DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2,
+                             ITYPE_t size):
+        if self.euclidean:
+            return euclidean_rdist(x1, x2, size)
+        else:
+            return self.dm.rdist(x1, x2, size)
 
     cdef void _recursive_build(self, ITYPE_t i_node,
                                ITYPE_t idx_start, ITYPE_t idx_end):
@@ -560,7 +583,7 @@ cdef class BallTree:
                 pt += Xarr.shape[1]
 
         distances, indices = heap.get_arrays(sort=True)
-        distances = self.dm.rdist_to_dist(distances)
+        distances = self.dm.rdist_to_dist_arr(distances)
 
         # deflatten results
         if return_distance:
@@ -591,9 +614,9 @@ cdef class BallTree:
         elif node_info.is_leaf:
             self.n_leaves += 1
             for i in range(node_info.idx_start, node_info.idx_end):
-                dist_pt = self.dm.rdist(pt,
-                                        &self.data[self.idx_array[i], 0],
-                                        self.data.shape[1])
+                dist_pt = self.rdist(pt,
+                                     &self.data[self.idx_array[i], 0],
+                                     self.data.shape[1])
                 if dist_pt < heap.largest(i_pt):
                     heap.push(i_pt, dist_pt, self.idx_array[i])
 
@@ -649,7 +672,7 @@ cdef class BallTree:
                     continue
 
                 for i1 in range(node_info1.idx_start, node_info1.idx_end):
-                    dist_pt = self.dm.rdist(
+                    dist_pt = self.rdist(
                         data1 + n_features * self.idx_array[i1],
                         data2 + n_features * i_pt,
                         n_features)
@@ -780,44 +803,39 @@ cdef class BallTree:
         # determine Node radius
         radius = 0
         for i in range(idx_start, idx_end):
-            # XXX: use rdist here
             radius = fmax(radius,
-                          self.dm.dist(centroid,
-                                       data + n_features * idx_array[i],
-                                       n_features))
+                          self.rdist(centroid,
+                                     data + n_features * idx_array[i],
+                                     n_features))
 
-        self.node_data[i_node].radius = radius
+        self.node_data[i_node].radius = self.dm.rdist_to_dist(radius)
         self.node_data[i_node].idx_start = idx_start
         self.node_data[i_node].idx_end = idx_end
 
     cdef inline DTYPE_t min_dist(self, ITYPE_t i_node, DTYPE_t* pt):
         cdef DTYPE_t dist_pt
-        dist_pt = self.dm.dist(pt, &self.centroids[i_node, 0],
-                               self.data.shape[1])
+        dist_pt = self.dist(pt, &self.centroids[i_node, 0],
+                            self.data.shape[1])
         return fmax(0, dist_pt - self.node_data[i_node].radius)
 
     cdef inline DTYPE_t max_dist(self, ITYPE_t i_node, DTYPE_t* pt):
         cdef DTYPE_t dist_pt
-        dist_pt = self.dm.dist(pt, &self.centroids[i_node, 0],
-                               self.data.shape[1])
+        dist_pt = self.dist(pt, &self.centroids[i_node, 0],
+                            self.data.shape[1])
         return dist_pt + self.node_data[i_node].radius
 
     cdef inline DTYPE_t min_rdist(self, ITYPE_t i_node, DTYPE_t* pt):
-        cdef DTYPE_t tmp = self.min_dist(i_node, pt)
-        # XXX: do this correctly
-        return tmp * tmp
+        return self.dm.dist_to_rdist(self.min_dist(i_node, pt))
 
     cdef inline DTYPE_t max_rdist(self, ITYPE_t i_node, DTYPE_t* pt):
-        cdef DTYPE_t tmp = self.max_dist(i_node, pt)
-        # XXX: do this correctly
-        return tmp * tmp
+        return self.dm.dist_to_rdist(self.max_dist(i_node, pt))
 
     cdef inline DTYPE_t min_dist_dual(self, ITYPE_t i_node1,
                                       BallTree other, ITYPE_t i_node2):
         cdef DTYPE_t dist_pt
-        dist_pt = self.dm.dist(&other.centroids[i_node2, 0],
-                               &self.centroids[i_node1, 0],
-                               self.data.shape[1])
+        dist_pt = self.dist(&other.centroids[i_node2, 0],
+                             &self.centroids[i_node1, 0],
+                             self.data.shape[1])
         return fmax(0, (dist_pt
                         - self.node_data[i_node1].radius
                         - other.node_data[i_node2].radius))
@@ -825,23 +843,21 @@ cdef class BallTree:
     cdef inline DTYPE_t max_dist_dual(self, ITYPE_t i_node1,
                                       BallTree other, ITYPE_t i_node2):
         cdef DTYPE_t dist_pt
-        dist_pt = self.dm.dist(&other.centroids[i_node2, 0],
-                               &self.centroids[i_node1, 0],
-                               self.data.shape[1])
+        dist_pt = self.dist(&other.centroids[i_node2, 0],
+                             &self.centroids[i_node1, 0],
+                             self.data.shape[1])
         return (dist_pt + self.node_data[i_node1].radius
                 + other.node_data[i_node2].radius)
 
     cdef inline DTYPE_t min_rdist_dual(self, ITYPE_t i_node1,
                                        BallTree other, ITYPE_t i_node2):
-        cdef DTYPE_t tmp = self.min_dist_dual(i_node1, other, i_node2)
-        # XXX: do this correctly
-        return tmp * tmp
+        return self.dm.dist_to_rdist(self.min_dist_dual(i_node1,
+                                                        other, i_node2))
 
     cdef inline DTYPE_t max_rdist_dual(self, ITYPE_t i_node1,
                                        BallTree other, ITYPE_t i_node2):
-        cdef DTYPE_t tmp = self.max_dist_dual(i_node1, other, i_node2)
-        # XXX: do this correctly
-        return tmp * tmp
+        return self.dm.dist_to_rdist(self.max_dist_dual(i_node1,
+                                                        other, i_node2))
 
 
 ######################################################################
