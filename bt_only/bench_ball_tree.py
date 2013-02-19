@@ -107,19 +107,25 @@ def bench_ball_tree(N=1000, D=5, k=15):
     X = np.random.random((N, D)).astype(DTYPE)
 
     btskl = skBallTree(X, leaf_size=20)
-    bt1 = ball_tree_v1.BallTree(X, leaf_size=20)
+    bt1 = ball_tree_v1.BallTree(X, leaf_size=1)
+    bt2 = ball_tree_v2.BallTree(X, leaf_size=1)
 
     t0 = time()
     Dskl, Iskl = btskl.query(X, k)
     t1 = time()
     D1, I1 = bt1.query(X, k)
     t2 = time()
+    D2, I2 = bt2.query(X, k)
+    t3 = time()
 
     print("  sklearn : %.2g sec" % (t1 - t0))
     print("  memview : %.2g sec" % (t2 - t1))
+    print("  pointer : %.2g sec" % (t3 - t2))
     print
-    print(" distances match: %s" % np.allclose(D1, Dskl))
-    print(" indices match:   %s" % np.allclose(I1, Iskl))
+    print(" distances match: (%s, %s)" % (np.allclose(D1, Dskl),
+                                          np.allclose(D2, D1)))
+    print(" indices match:   (%s, %s)" % (np.allclose(I1, Iskl),
+                                          np.allclose(I2, I1)))
 
 
 if __name__ == '__main__':
