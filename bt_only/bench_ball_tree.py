@@ -102,13 +102,13 @@ def bench_euclidean_dist(n1=1000, n2=1100, d=3):
           % ', '.join(['%s' % np.allclose(D[i - 1], D[i])
                        for i in range(len(D))]))
 
-def bench_ball_tree(N=1000, D=5, k=15):
+def bench_ball_tree(N=1000, D=3, k=15, leaf_size=30):
     print("Ball Tree")
     X = np.random.random((N, D)).astype(DTYPE)
 
-    btskl = skBallTree(X, leaf_size=20)
-    bt1 = ball_tree_v1.BallTree(X, leaf_size=1)
-    bt2 = ball_tree_v2.BallTree(X, leaf_size=1)
+    btskl = skBallTree(X, leaf_size=leaf_size)
+    bt1 = ball_tree_v1.BallTree(X, leaf_size=leaf_size)
+    bt2 = ball_tree_v2.BallTree(X, leaf_size=leaf_size)
 
     t0 = time()
     Dskl, Iskl = btskl.query(X, k)
@@ -143,4 +143,4 @@ if __name__ == '__main__':
     bench_simultaneous_sort()
     bench_neighbors_heap()
     bench_euclidean_dist()
-    bench_ball_tree()
+    bench_ball_tree(1000)
