@@ -41,6 +41,9 @@ DTYPE = np.asarray(ddummy_view).dtype
 
 ######################################################################
 # Inline distance functions
+#
+#  We use these for the default (euclidean) case so that they can
+#  be inlined.  This leads to much faster computation for this case.
 cdef inline DTYPE_t euclidean_dist(DTYPE_t* x1, DTYPE_t* x2,
                                    ITYPE_t size):
     cdef DTYPE_t tmp, d=0
@@ -56,6 +59,12 @@ cdef inline DTYPE_t euclidean_rdist(DTYPE_t* x1, DTYPE_t* x2,
         tmp = x1[j] - x2[j]
         d += tmp * tmp
     return d
+
+cdef inline DTYPE_t euclidean_dist_to_rdist(DTYPE_t dist):
+    return dist * dist
+
+cdef inline DTYPE_t euclidean_rdist_to_dist(DTYPE_t dist):
+    return sqrt(dist)
 
 cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
     if X.shape[1] != Y.shape[1]:
@@ -141,18 +150,10 @@ cdef class DistanceMetric:
 # EuclideanDistance specialization
 cdef class EuclideanDistance(DistanceMetric):
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
-        cdef DTYPE_t tmp, d=0
-        for j in range(size):
-            tmp = x1[j] - x2[j]
-            d += tmp * tmp
-        return sqrt(d)
+        return euclidean_dist(x1, x2, size)
 
     cdef inline DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
-        cdef DTYPE_t tmp, d=0
-        for j in range(size):
-            tmp = x1[j] - x2[j]
-            d += tmp * tmp
-        return d
+        return euclidean_rdist(x1, x2, size)
 
     cdef inline DTYPE_t rdist_to_dist(self, DTYPE_t rdist):
         return sqrt(rdist)
@@ -835,6 +836,9 @@ cdef class BallTree:
                                      DTYPE_t[::1] bounds,
                                      NeighborsHeap heap,
                                      DTYPE_t reduced_dist_LB):
+        # note that the array `bounds` is maintained such that
+        # bounds[i] is the largest distance among any of the
+        # current neighbors in node i of the other tree.
         cdef NodeData_t node_info1 = self.node_data[i_node1]
         cdef NodeData_t node_info2 = other.node_data[i_node2]
 
@@ -842,8 +846,8 @@ cdef class BallTree:
         cdef DTYPE_t* data2 = &other.data[0, 0]
         cdef ITYPE_t n_features = self.data.shape[1]
 
-        cdef DTYPE_t dist_pt, reduced_dist_LB1, reduced_dist_LB2
-        cdef ITYPE_t i1, i2, i_pt
+        cdef DTYPE_t bound_max, dist_pt, reduced_dist_LB1, reduced_dist_LB2
+        cdef ITYPE_t i1, i2, i_pt, i_parent
 
         #------------------------------------------------------------
         # Case 1: nodes are further apart than the current bound:
@@ -874,6 +878,17 @@ cdef class BallTree:
                 # keep track of node bound
                 bounds[i_node2] = fmax(bounds[i_node2],
                                        heap.largest(i_pt))
+
+            # update bounds up the tree
+            while i_node2 > 0:
+                i_parent = (i_node2 - 1) // 2
+                bound_max = fmax(bounds[2 * i_parent + 1],
+                                 bounds[2 * i_parent + 2])
+                if bound_max < bounds[i_parent]:
+                    bounds[i_parent] = bound_max
+                    i_node2 = i_parent
+                else:
+                    break
             
         #------------------------------------------------------------
         # Case 3a: node 1 is a leaf: split node 2 and recursively
@@ -896,8 +911,8 @@ cdef class BallTree:
                                             bounds, heap, reduced_dist_LB1)
             
             # update node bound information
-            bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
-                                   bounds[2 * i_node2 + 2])
+            #bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
+            #                       bounds[2 * i_node2 + 2])
             
         #------------------------------------------------------------
         # Case 3b: node 2 is a leaf: split node 1 and recursively
@@ -963,8 +978,97 @@ cdef class BallTree:
                                             bounds, heap, reduced_dist_LB1)
             
             # update node bound information
-            bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
-                                   bounds[2 * i_node2 + 2])
+            #bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
+            #                       bounds[2 * i_node2 + 2])
+
+    cdef void _query_dual_breadthfirst(BallTree self, BallTree other,
+                                       NeighborsHeap heap, NodeHeap nodeheap):
+        cdef ITYPE_t i, i1, i2, i_node1, i_node2, i_pt
+        cdef DTYPE_t reduced_dist_LB
+        cdef DTYPE_t[::1] bounds = np.inf + np.zeros(other.node_data.shape[0])
+        cdef NodeData_t* node_data1 = &self.node_data[0]
+        cdef NodeData_t* node_data2 = &other.node_data[0]
+        cdef NodeData_t node_info1, node_info2
+        cdef DTYPE_t* data1 = &self.data[0, 0]
+        cdef DTYPE_t* data2 = &other.data[0, 0]
+        cdef ITYPE_t n_features = self.data.shape[1]
+
+        # Set up the node heap and push the head nodes onto it
+        cdef NodeHeapData_t nodeheap_item
+        nodeheap_item.val = self.min_rdist_dual(0, other, 0)
+        nodeheap_item.i1 = 0
+        nodeheap_item.i2 = 0
+        nodeheap.push(nodeheap_item)
+
+        while nodeheap.n > 0:
+            nodeheap_item = nodeheap.pop()
+            reduced_dist_LB = nodeheap_item.val
+            i_node1 = nodeheap_item.i1
+            i_node2 = nodeheap_item.i2
+            
+            node_info1 = node_data1[i_node1]
+            node_info2 = node_data2[i_node2]
+
+            #------------------------------------------------------------
+            # Case 1: nodes are further apart than the current bound:
+            #         trim both from the query
+            if reduced_dist_LB > bounds[i_node2]:
+                pass
+
+            #------------------------------------------------------------
+            # Case 2: both nodes are leaves:
+            #         do a brute-force search comparing all pairs
+            elif node_info1.is_leaf and node_info2.is_leaf:
+                bounds[i_node2] = -1
+
+                for i2 in range(node_info2.idx_start, node_info2.idx_end):
+                    i_pt = other.idx_array[i2]
+                
+                    if heap.largest(i_pt) <= reduced_dist_LB:
+                        continue
+
+                    for i1 in range(node_info1.idx_start, node_info1.idx_end):
+                        dist_pt = self.rdist(
+                            data1 + n_features * self.idx_array[i1],
+                            data2 + n_features * i_pt,
+                            n_features)
+                        if dist_pt < heap.largest(i_pt):
+                            heap.push(i_pt, dist_pt, self.idx_array[i1])
+                
+                # keep track of node bound
+                bounds[i_node2] = fmax(bounds[i_node2],
+                                       heap.largest(i_pt))
+            
+            #------------------------------------------------------------
+            # Case 3a: node 1 is a leaf: split node 2 and recursively
+            #          query, starting with the nearest node
+            elif node_info1.is_leaf:
+                nodeheap_item.i1 = i_node1
+                for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
+                    nodeheap_item.i2 = i2
+                    nodeheap_item.val = self.min_rdist_dual(i_node1, other, i2)
+                    nodeheap.push(nodeheap_item)
+            
+            #------------------------------------------------------------
+            # Case 3b: node 2 is a leaf: split node 1 and recursively
+            #          query, starting with the nearest node
+            elif node_info2.is_leaf:
+                nodeheap_item.i2 = i_node2
+                for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
+                    nodeheap_item.i1 = i1
+                    nodeheap_item.val = self.min_rdist_dual(i1, other, i_node2)
+                    nodeheap.push(nodeheap_item)
+        
+            #------------------------------------------------------------
+            # Case 4: neither node is a leaf:
+            #         split both and recursively query all four pairs
+            else:
+                for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
+                    for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
+                        nodeheap_item.i1 = i1
+                        nodeheap_item.i2 = i2
+                        nodeheap_item.val = self.min_rdist_dual(i1, other, i2)
+                        nodeheap.push(nodeheap_item)
 
     #----------------------------------------------------------------------
     # The following methods can be changed to produce a different tree type
@@ -1025,10 +1129,16 @@ cdef class BallTree:
         return dist_pt + self.node_data[i_node].radius
 
     cdef inline DTYPE_t min_rdist(self, ITYPE_t i_node, DTYPE_t* pt):
-        return self.dm.dist_to_rdist(self.min_dist(i_node, pt))
+        if self.euclidean:
+            return euclidean_dist_to_rdist(self.min_dist(i_node, pt))
+        else:
+            return self.dm.dist_to_rdist(self.min_dist(i_node, pt))
 
     cdef inline DTYPE_t max_rdist(self, ITYPE_t i_node, DTYPE_t* pt):
-        return self.dm.dist_to_rdist(self.max_dist(i_node, pt))
+        if self.euclidean:
+            return euclidean_dist_to_rdist(self.max_dist(i_node, pt))
+        else:
+            return self.dm.dist_to_rdist(self.max_dist(i_node, pt))
 
     cdef inline DTYPE_t min_dist_dual(self, ITYPE_t i_node1,
                                       BallTree other, ITYPE_t i_node2):
@@ -1051,13 +1161,21 @@ cdef class BallTree:
 
     cdef inline DTYPE_t min_rdist_dual(self, ITYPE_t i_node1,
                                        BallTree other, ITYPE_t i_node2):
-        return self.dm.dist_to_rdist(self.min_dist_dual(i_node1,
-                                                        other, i_node2))
+        if self.euclidean:
+            return euclidean_dist_to_rdist(self.min_dist_dual(i_node1,
+                                                              other, i_node2))
+        else:
+            return self.dm.dist_to_rdist(self.min_dist_dual(i_node1,
+                                                            other, i_node2))
 
     cdef inline DTYPE_t max_rdist_dual(self, ITYPE_t i_node1,
                                        BallTree other, ITYPE_t i_node2):
-        return self.dm.dist_to_rdist(self.max_dist_dual(i_node1,
-                                                        other, i_node2))
+        if self.euclidean:
+            return euclidean_dist_to_rdist(self.max_dist_dual(i_node1,
+                                                              other, i_node2))
+        else:
+            return self.dm.dist_to_rdist(self.max_dist_dual(i_node1,
+                                                            other, i_node2))
 
 
 ######################################################################
