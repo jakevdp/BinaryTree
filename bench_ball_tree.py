@@ -101,15 +101,18 @@ def bench_ball_tree(N=2000, D=3, k=15, leaf_size=30):
     t3 = time()
     D3, I3 = bt.query(X, k, dualtree=True, breadth_first=False)
     t4 = time()
+    D4, I4 = bt.query(X, k, dualtree=True, breadth_first=True)
+    t5 = time()
 
-    dist = [Dskl, D1, D2, D3]
-    ind  = [Iskl, I1, I2, I3]
+    dist = [Dskl, D1, D2, D3, D4]
+    ind  = [Iskl, I1, I2, I3, I4]
 
     print("Query:")
     print("  sklearn                 : %.2g sec" % (t1 - t0))
     print("  new/single/depthfirst   : %.2g sec" % (t2 - t1))
     print("  new/single/breadthfirst : %.2g sec" % (t3 - t2))
     print("  new/dual/depthfirst     : %.2g sec" % (t4 - t3))
+    print("  new/dual/breadthfirst   : %.2g sec" % (t5 - t4))
     print
     print(" distances match: %s"
           % ', '.join(['%s' % np.allclose(dist[i - 1], dist[i])

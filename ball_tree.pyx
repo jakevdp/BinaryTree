@@ -3,8 +3,6 @@
 #cython: wraparound=False
 #cython: cdivision=True
 
-# Ball Tree with raw data pointers
-
 cimport cython
 cimport numpy as np
 from libc.math cimport fmax, fmin, fabs, sqrt
@@ -19,15 +17,13 @@ import warnings
 ctypedef np.float64_t DTYPE_t
 
 # Index/integer type.
-#  WARNING: ITYPE_t must be a signed integer type!!
+#  WARNING: ITYPE_t must be a signed integer type or you will have a bad time!
 ctypedef np.intp_t ITYPE_t
 
 # Fused type for certain operations
 ctypedef fused DITYPE_t:
     ITYPE_t
     DTYPE_t
-
-cdef DTYPE_t INF = np.inf
 
 # use a hack to determine the associated numpy data types
 cdef ITYPE_t idummy
@@ -38,6 +34,7 @@ cdef DTYPE_t ddummy
 cdef DTYPE_t[:] ddummy_view = <DTYPE_t[:1]> &ddummy
 DTYPE = np.asarray(ddummy_view).dtype
 
+cdef DTYPE_t INF = np.inf
 
 ######################################################################
 # Inline distance functions
@@ -84,10 +81,26 @@ cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
 #------------------------------------------------------------
 # DistanceMetric base class
 cdef class DistanceMetric:
+    cdef DTYPE_t p
+
     @classmethod
     def get_metric(cls, metric, **kwargs):
-        if metric in [None, 'euclidean', 'l2', EuclideanDistance]:
-            return EuclideanDistance(**kwargs)
+        if isinstance(metric, DistanceMetric):
+            return metric
+        elif isinstance(metric, type) and issubclass(metric, DistanceMetric):
+            return metric(**kwargs)
+        elif metric in [None, 'euclidean', 'l2']:
+            return EuclideanDistance()
+        elif metric in ['manhattan', 'cityblock', 'l1']:
+            return ManhattanDistance()
+        elif metric in ['minkowski', 'p']:
+            p = kwargs.get('p', 2)
+            if p == 1:
+                return ManhattanDistance()
+            if p == 2:
+                return EuclideanDistance()
+            else:
+                return MinkowskiDistance(p)
         else:
             raise ValueError('metric = "%s" not recognized' % str(metric))
 
@@ -149,6 +162,9 @@ cdef class DistanceMetric:
 #------------------------------------------------------------
 # EuclideanDistance specialization
 cdef class EuclideanDistance(DistanceMetric):
+    def __init__(self):
+        self.p = 2
+
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         return euclidean_dist(x1, x2, size)
 
@@ -166,6 +182,46 @@ cdef class EuclideanDistance(DistanceMetric):
 
     def dist_to_rdist_arr(self, dist):
         return dist ** 2
+
+
+cdef class ManhattanDistance(DistanceMetric):
+    def __init__(self):
+        self.p = 1
+
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef DTYPE_t d = 0
+        for j in range(size):
+            d += fabs(x1[j] - x2[j])
+        return d
+
+
+cdef class MinkowskiDistance(DistanceMetric):
+    def __init__(self, p):
+        self.p = p
+
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef DTYPE_t d = 0
+        for j in range(size):
+            d += pow(fabs(x1[j] - x2[j]), self.p)
+        return pow(d, 1. / self.p)
+
+    cdef inline DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef DTYPE_t d=0
+        for j in range(size):
+            d += pow(fabs(x1[j] - x2[j]), self.p)
+        return d
+
+    cdef inline DTYPE_t rdist_to_dist(self, DTYPE_t rdist):
+        return pow(rdist, 1. / self.p)
+
+    cdef inline DTYPE_t dist_to_rdist(self, DTYPE_t dist):
+        return pow(dist, self.p)
+
+    def rdist_to_dist_arr(self, rdist):
+        return rdist ** (1. / self.p)
+
+    def dist_to_rdist_arr(self, dist):
+        return dist ** self.p
 
 
 ######################################################################
@@ -691,6 +747,8 @@ cdef class BallTree:
 
         # node heap for breadth-first queries
         cdef NodeHeap nodeheap
+        if breadth_first:
+            nodeheap = NodeHeap(self.data.shape[0] // self.leaf_size)
 
         # bounds is needed for the dual tree algorithm
         cdef DTYPE_t[::1] bounds
@@ -702,17 +760,20 @@ cdef class BallTree:
         if dualtree:
             # build a tree on query data with the same metric as self
             # XXX: make sure this is correct, and allow passing a tree
-            other = self.__class__(Xarr, leaf_size=self.leaf_size)
-            reduced_dist_LB = self.min_rdist_dual(0, other, 0)
-            bounds = np.inf + np.zeros(other.node_data.shape[0])
-            self._query_dual_depthfirst(0, other, 0, bounds,
-                                        heap, reduced_dist_LB)
+            other = self.__class__(Xarr, metric=self.dm,
+                                   leaf_size=self.leaf_size)
+            if breadth_first:
+                self._query_dual_breadthfirst(other, heap, nodeheap)
+            else:
+                reduced_dist_LB = self.min_rdist_dual(0, other, 0)
+                bounds = np.inf + np.zeros(other.node_data.shape[0])
+                self._query_dual_depthfirst(0, other, 0, bounds,
+                                            heap, reduced_dist_LB)
 
         else:
             pt = &Xarr[0, 0]
 
             if breadth_first:
-                nodeheap = NodeHeap(self.data.shape[0] // self.leaf_size)
                 for i in range(Xarr.shape[0]):
                     self._query_one_breadthfirst(pt, i, heap, nodeheap)
                     pt += Xarr.shape[1]
@@ -859,7 +920,7 @@ cdef class BallTree:
         # Case 2: both nodes are leaves:
         #         do a brute-force search comparing all pairs
         elif node_info1.is_leaf and node_info2.is_leaf:
-            bounds[i_node2] = -1
+            bounds[i_node2] = 0
 
             for i2 in range(node_info2.idx_start, node_info2.idx_end):
                 i_pt = other.idx_array[i2]
@@ -909,10 +970,6 @@ cdef class BallTree:
                                             bounds, heap, reduced_dist_LB2)
                 self._query_dual_depthfirst(i_node1, other, 2 * i_node2 + 1,
                                             bounds, heap, reduced_dist_LB1)
-            
-            # update node bound information
-            #bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
-            #                       bounds[2 * i_node2 + 2])
             
         #------------------------------------------------------------
         # Case 3b: node 2 is a leaf: split node 1 and recursively
@@ -976,10 +1033,6 @@ cdef class BallTree:
                 self._query_dual_depthfirst(2 * i_node1 + 1,
                                             other, 2 * i_node2 + 2,
                                             bounds, heap, reduced_dist_LB1)
-            
-            # update node bound information
-            #bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
-            #                       bounds[2 * i_node2 + 2])
 
     cdef void _query_dual_breadthfirst(BallTree self, BallTree other,
                                        NeighborsHeap heap, NodeHeap nodeheap):
@@ -1035,9 +1088,9 @@ cdef class BallTree:
                         if dist_pt < heap.largest(i_pt):
                             heap.push(i_pt, dist_pt, self.idx_array[i1])
                 
-                # keep track of node bound
-                bounds[i_node2] = fmax(bounds[i_node2],
-                                       heap.largest(i_pt))
+                    # keep track of node bound
+                    bounds[i_node2] = fmax(bounds[i_node2],
+                                           heap.largest(i_pt))
             
             #------------------------------------------------------------
             # Case 3a: node 1 is a leaf: split node 2 and recursively
