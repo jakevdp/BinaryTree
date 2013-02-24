@@ -628,6 +628,7 @@ cdef class BallTree:
 
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2,
                              ITYPE_t size):
+        self.n_calls += 1
         if self.euclidean:
             return euclidean_dist(x1, x2, size)
         else:
@@ -635,6 +636,7 @@ cdef class BallTree:
 
     cdef inline DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2,
                               ITYPE_t size):
+        self.n_calls += 1
         if self.euclidean:
             return euclidean_rdist(x1, x2, size)
         else:
@@ -847,7 +849,7 @@ cdef class BallTree:
                                       NeighborsHeap heap,
                                       NodeHeap nodeheap):
         cdef ITYPE_t i, i_node
-        cdef DTYPE_t reduced_dist_LB
+        cdef DTYPE_t dist_pt, reduced_dist_LB
         cdef NodeData_t* node_data = &self.node_data[0]
         cdef DTYPE_t* data = &self.data[0, 0]
 
@@ -1035,7 +1037,7 @@ cdef class BallTree:
     cdef void _query_dual_breadthfirst(BallTree self, BallTree other,
                                        NeighborsHeap heap, NodeHeap nodeheap):
         cdef ITYPE_t i, i1, i2, i_node1, i_node2, i_pt
-        cdef DTYPE_t reduced_dist_LB
+        cdef DTYPE_t dist_pt, reduced_dist_LB
         cdef DTYPE_t[::1] bounds = np.inf + np.zeros(other.node_data.shape[0])
         cdef NodeData_t* node_data1 = &self.node_data[0]
         cdef NodeData_t* node_data2 = &other.node_data[0]
@@ -1168,15 +1170,13 @@ cdef class BallTree:
         self.node_data[i_node].idx_end = idx_end
 
     cdef inline DTYPE_t min_dist(self, ITYPE_t i_node, DTYPE_t* pt):
-        cdef DTYPE_t dist_pt
-        dist_pt = self.dist(pt, &self.centroids[i_node, 0],
-                            self.data.shape[1])
+        cdef DTYPE_t dist_pt = self.dist(pt, &self.centroids[i_node, 0],
+                                         self.data.shape[1])
         return fmax(0, dist_pt - self.node_data[i_node].radius)
 
     cdef inline DTYPE_t max_dist(self, ITYPE_t i_node, DTYPE_t* pt):
-        cdef DTYPE_t dist_pt
-        dist_pt = self.dist(pt, &self.centroids[i_node, 0],
-                            self.data.shape[1])
+        cdef DTYPE_t dist_pt = self.dist(pt, &self.centroids[i_node, 0],
+                                         self.data.shape[1])
         return dist_pt + self.node_data[i_node].radius
 
     cdef inline DTYPE_t min_rdist(self, ITYPE_t i_node, DTYPE_t* pt):
@@ -1193,20 +1193,17 @@ cdef class BallTree:
 
     cdef inline DTYPE_t min_dist_dual(self, ITYPE_t i_node1,
                                       BallTree other, ITYPE_t i_node2):
-        cdef DTYPE_t dist_pt
-        dist_pt = self.dist(&other.centroids[i_node2, 0],
-                             &self.centroids[i_node1, 0],
-                             self.data.shape[1])
-        return fmax(0, (dist_pt
-                        - self.node_data[i_node1].radius
+        cdef DTYPE_t dist_pt = self.dist(&other.centroids[i_node2, 0],
+                                          &self.centroids[i_node1, 0],
+                                          self.data.shape[1])
+        return fmax(0, (dist_pt - self.node_data[i_node1].radius
                         - other.node_data[i_node2].radius))
 
     cdef inline DTYPE_t max_dist_dual(self, ITYPE_t i_node1,
                                       BallTree other, ITYPE_t i_node2):
-        cdef DTYPE_t dist_pt
-        dist_pt = self.dist(&other.centroids[i_node2, 0],
-                             &self.centroids[i_node1, 0],
-                             self.data.shape[1])
+        cdef DTYPE_t dist_pt = self.dist(&other.centroids[i_node2, 0],
+                                          &self.centroids[i_node1, 0],
+                                          self.data.shape[1])
         return (dist_pt + self.node_data[i_node1].radius
                 + other.node_data[i_node2].radius)
 

@@ -1,5 +1,6 @@
 from time import time
 import numpy as np
+from scipy.spatial.distance import cdist
 import ball_tree
 from ball_tree import BallTree, DTYPE, ITYPE
 from sklearn.neighbors import BallTree as skBallTree
@@ -54,12 +55,14 @@ def bench_euclidean_dist(n1=1000, n2=1100, d=3):
 
     eucl = ball_tree.EuclideanDistance()
     
-    funcs = [ball_tree.euclidean_pairwise_inline,
+    funcs = [cdist,
+             ball_tree.euclidean_pairwise_inline,
              ball_tree.euclidean_pairwise_class,
              ball_tree.euclidean_pairwise_polymorphic,
              eucl.pairwise]
 
-    labels = ["inline",
+    labels = ["scipy/cdist",
+              "inline",
               "class/direct",
               "class/polymorphic",
               "class/member func"]
@@ -95,24 +98,39 @@ def bench_ball_tree(N=2000, D=3, k=15, leaf_size=30):
     t0 = time()
     Dskl, Iskl = btskl.query(X, k)
     t1 = time()
-    D1, I1 = bt.query(X, k, dualtree=False, breadth_first=False)
-    t2 = time()
-    D2, I2 = bt.query(X, k, dualtree=False, breadth_first=True)
-    t3 = time()
-    D3, I3 = bt.query(X, k, dualtree=True, breadth_first=False)
-    t4 = time()
-    D4, I4 = bt.query(X, k, dualtree=True, breadth_first=True)
-    t5 = time()
 
-    dist = [Dskl, D1, D2, D3, D4]
-    ind  = [Iskl, I1, I2, I3, I4]
+    dist = [Dskl]
+    ind = [Iskl]
+    times = [t1 - t0]
+    labels = ['sklearn']
+    counts = [-1]
+
+    for dualtree in (False, True):
+        for breadth_first in (False, True):
+            bt.reset_n_calls()
+            t0 = time()
+            D, I = bt.query(X, k, dualtree=dualtree,
+                            breadth_first=breadth_first)
+            t1 = time()
+            dist.append(D)
+            ind.append(I)
+            times.append(t1 - t0)
+            counts.append(bt.get_n_calls())
+
+            if dualtree:
+                label = 'dual/'
+            else:
+                label = 'single/'
+
+            if breadth_first:
+                label += 'breadthfirst'
+            else:
+                label += 'depthfirst'
+            labels.append(label)
 
     print("Query:")
-    print("  sklearn                 : %.2g sec" % (t1 - t0))
-    print("  new/single/depthfirst   : %.2g sec" % (t2 - t1))
-    print("  new/single/breadthfirst : %.2g sec" % (t3 - t2))
-    print("  new/dual/depthfirst     : %.2g sec" % (t4 - t3))
-    print("  new/dual/breadthfirst   : %.2g sec" % (t5 - t4))
+    for lab, t, c in zip(labels, times, counts):
+        print("  %s : %.2g sec (%i calls)" % (lab, t, c))
     print
     print(" distances match: %s"
           % ', '.join(['%s' % np.allclose(dist[i - 1], dist[i])
