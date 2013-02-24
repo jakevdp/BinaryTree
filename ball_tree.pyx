@@ -722,7 +722,7 @@ cdef class BallTree:
             # >>> np.random.seed(0)
             # >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
             # >>> ball_tree = BallTree(X, leaf_size=2)
-            # >>> dist, ind = ball_tree.query(X[0], k=3)
+            # >>> dist, ind = ball_tree.quer
             # >>> print ind  # indices of 3 closest neighbors
             # [0 3 1]
             # >>> print dist  # distances to 3 closest neighbors
@@ -793,6 +793,149 @@ cdef class BallTree:
                     indices.reshape(X.shape[:-1] + (k,)))
         else:
             return indices.reshape(X.shape[:-1] + (k,))
+
+
+    def query_radius(self, X, r, return_distance=False,
+                     int count_only=False, int sort_results=False):
+        """
+        query_radius(self, X, r, return_distance=False,
+                     count_only = False, sort_results=False):
+
+        query the Ball Tree for neighbors within a ball of size r
+
+        Parameters
+        ----------
+        X : array-like, last dimension self.dim
+            An array of points to query
+        r : distance within which neighbors are returned
+            r can be a single value, or an array of values of shape
+            x.shape[:-1] if different radii are desired for each point.
+        return_distance : boolean (default = False)
+            if True,  return distances to neighbors of each point
+            if False, return only neighbors
+            Note that unlike BallTree.query(), setting return_distance=True
+            adds to the computation time.  Not all distances need to be
+            calculated explicitly for return_distance=False.  Results are
+            not sorted by default: see ``sort_results`` keyword.
+        count_only : boolean (default = False)
+            if True,  return only the count of points within distance r
+            if False, return the indices of all points within distance r
+            If return_distance==True, setting count_only=True will
+            result in an error.
+        sort_results : boolean (default = False)
+            if True, the distances and indices will be sorted before being
+            returned.  If False, the results will not be sorted.  If
+            return_distance == False, setting sort_results = True will
+            result in an error.
+
+        Returns
+        -------
+        count       : if count_only == True
+        ind         : if count_only == False and return_distance == False
+        (ind, dist) : if count_only == False and return_distance == True
+
+        count : array of integers, shape = X.shape[:-1]
+            each entry gives the number of neighbors within
+            a distance r of the corresponding point.
+
+        ind : array of objects, shape = X.shape[:-1]
+            each element is a numpy integer array listing the indices of
+            neighbors of the corresponding point.  Note that unlike
+            the results of BallTree.query(), the returned neighbors
+            are not sorted by distance
+
+        dist : array of objects, shape = X.shape[:-1]
+            each element is a numpy double array
+            listing the distances corresponding to indices in i.
+
+        Examples
+        --------
+        Query for neighbors in a given radius
+
+        # >>> import numpy as np
+        # >>> np.random.seed(0)
+        # >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
+        # >>> ball_tree = BallTree(X, leaf_size=2)
+        # >>> print ball_tree.query_radius(X[0], r=0.3, count_only=True)
+        # 3
+        # >>> ind = ball_tree.query_radius(X[0], r=0.3)
+        # >>> print ind  # indices of neighbors within distance 0.3
+        # [3 0 1]
+        """
+        if count_only and return_distance:
+            raise ValueError("count_only and return_distance "
+                             "cannot both be true")
+
+        if sort_results and not return_distance:
+            raise ValueError("return_distance must be True "
+                             "if sort_results is True")
+
+        cdef ITYPE_t i, count_i = 0
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef DTYPE_t[::1] dist_arr_i
+        cdef ITYPE_t[::1] idx_arr_i, count_arr
+        cdef DTYPE_t* pt
+
+        # validate X and prepare for query
+        X = np.atleast_2d(np.asarray(X, dtype=DTYPE, order='C'))
+
+        if X.shape[-1] != self.data.shape[1]:
+            raise ValueError("query data dimension must "
+                             "match training data dimension")
+
+        cdef DTYPE_t[:, ::1] Xarr = X.reshape((-1, self.data.shape[1]))
+
+        # prepare r for query
+        r = np.asarray(r, dtype=DTYPE, order='C')
+        r = np.atleast_1d(r)
+        if r.shape == (1,):
+            r = r[0] + np.zeros(X.shape[:-1], dtype=DTYPE)
+        else:
+            if r.shape != X.shape[:-1]:
+                raise ValueError("r must be broadcastable to X.shape")
+
+        cdef DTYPE_t[::1] rarr = r.reshape(-1)
+
+        # prepare variables for iteration
+        if not count_only:
+            indices = np.zeros(Xarr.shape[0], dtype='object')
+            if return_distance:
+                distances = np.zeros(Xarr.shape[0], dtype='object')
+
+        idx_arr_i = np.zeros(self.data.shape[0], dtype=ITYPE)
+        dist_arr_i = np.zeros(self.data.shape[0], dtype=DTYPE)
+        count_arr = np.zeros(Xarr.shape[0], dtype=ITYPE)
+
+        pt = &Xarr[0, 0]
+        for i in range(Xarr.shape[0]):
+            count_arr[i] = self._query_radius_one(0, pt, rarr[i],
+                                                  &idx_arr_i[0],
+                                                  &dist_arr_i[0],
+                                                  0, count_only,
+                                                  return_distance)
+            pt += n_features
+
+            if count_only:
+                pass
+            else:
+                if sort_results:
+                    _simultaneous_sort(&dist_arr_i[0], &idx_arr_i[0],
+                                       count_arr[i])
+
+                indices[i] = np.array(idx_arr_i[:count_arr[i]],
+                                      copy=True)
+                if return_distance:
+                    distances[i] = np.array(dist_arr_i[:count_arr[i]],
+                                            copy=True)
+
+        # deflatten results
+        if count_only:
+            return np.asarray(count_arr).reshape(X.shape[:-1])
+        elif return_distance:
+            return (indices.reshape(X.shape[:-1]),
+                    distances.reshape(X.shape[:-1]))
+        else:
+            return indices.reshape(X.shape[:-1])
 
     cdef void _query_one_depthfirst(BallTree self, ITYPE_t i_node,
                                     DTYPE_t* pt, ITYPE_t i_pt,
@@ -1122,6 +1265,84 @@ cdef class BallTree:
                         nodeheap_item.i2 = i2
                         nodeheap_item.val = self.min_rdist_dual(i1, other, i2)
                         nodeheap.push(nodeheap_item)
+
+    cdef ITYPE_t _query_radius_one(BallTree self,
+                                   ITYPE_t i_node,
+                                   DTYPE_t* pt, DTYPE_t r,
+                                   ITYPE_t* indices,
+                                   DTYPE_t* distances,
+                                   ITYPE_t count,
+                                   int count_only,
+                                   int return_distance):
+        cdef DTYPE_t* data = &self.data[0, 0]
+        cdef ITYPE_t* idx_array = &self.idx_array[0]
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef NodeData_t node_info = self.node_data[i_node]
+
+        cdef ITYPE_t i
+        cdef DTYPE_t reduced_r
+
+        # XXX: for efficiency, calculate dist_LB and dist_UB at the same time
+        cdef DTYPE_t dist_pt, dist_LB, dist_UB
+        dist_LB = self.min_dist(i_node, pt)
+        dist_UB = self.max_dist(i_node, pt)
+
+        #------------------------------------------------------------
+        # Case 1: all node points are outside distance r.
+        #         prune this branch.
+        if dist_LB > r:
+            pass
+
+        #------------------------------------------------------------
+        # Case 2: all node points are within distance r
+        #         add all points to neighbors
+        elif dist_UB <= r:
+            if count_only:
+                count += (node_info.idx_end - node_info.idx_start)
+            else:
+                for i in range(node_info.idx_start, node_info.idx_end):
+                    if (count < 0) or (count >= self.data.shape[0]):
+                        raise ValueError("Fatal: count too big: "
+                                         "this should never happen")
+                    indices[count] = idx_array[i]
+                    if return_distance:
+                        distances[count] = self.dist(pt, (data + n_features
+                                                          * idx_array[i]),
+                                                     n_features)
+                    count += 1
+
+        #------------------------------------------------------------
+        # Case 3: this is a leaf node.  Go through all points to
+        #         determine if they fall within radius
+        elif node_info.is_leaf:
+            reduced_r = self.dm.dist_to_rdist(r)
+
+            for i in range(node_info.idx_start, node_info.idx_end):
+                dist_pt = self.rdist(pt, (data + n_features * idx_array[i]),
+                                     n_features)
+                if dist_pt <= reduced_r:
+                    if (count < 0) or (count >= self.data.shape[0]):
+                        raise ValueError("Fatal: count out of range. "
+                                         "This should never happen.")
+                    if count_only:
+                        pass
+                    else:
+                        indices[count] = idx_array[i]
+                        if return_distance:
+                            distances[count] = self.dm.rdist_to_dist(dist_pt)
+                    count += 1
+
+        #------------------------------------------------------------
+        # Case 4: Node is not a leaf.  Recursively query subnodes
+        else:
+            count = self._query_radius_one(2 * i_node + 1, pt, r,
+                                           indices, distances, count,
+                                           count_only, return_distance)
+            count = self._query_radius_one(2 * i_node + 2, pt, r,
+                                           indices, distances, count,
+                                           count_only, return_distance)
+
+        return count
 
     #----------------------------------------------------------------------
     # The following methods can be changed to produce a different tree type

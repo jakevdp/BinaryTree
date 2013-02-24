@@ -14,7 +14,7 @@ def brute_force_neighbors(X, Y, k, metric, **kwargs):
     return dist, ind
 
 
-def test_ball_tree():
+def test_ball_tree_query():
     X = np.random.random((40, 3))
     Y = np.random.random((10, 3))
 
@@ -34,6 +34,43 @@ def test_ball_tree():
                     yield (check_neighbors,
                            dualtree, breadth_first,
                            k, metric, kwargs)
+
+
+def test_ball_tree_query_radius(n_samples=100, n_features=10):
+    X = 2 * np.random.random(size=(n_samples, n_features)) - 1
+    query_pt = np.zeros(n_features, dtype=float)
+
+    eps = 1E-15  # roundoff error can cause test to fail
+    bt = BallTree(X, leaf_size=5)
+    rad = np.sqrt(((X - query_pt) ** 2).sum(1))
+
+    for r in np.linspace(rad[0], rad[-1], 100):
+        ind = bt.query_radius(query_pt, r + eps)[0]
+        i = np.where(rad <= r + eps)[0]
+
+        ind.sort()
+        i.sort()
+
+        assert_allclose(i, ind)
+
+
+def test_ball_tree_query_radius_distance(n_samples=100, n_features=10):
+    X = 2 * np.random.random(size=(n_samples, n_features)) - 1
+    query_pt = np.zeros(n_features, dtype=float)
+
+    eps = 1E-15  # roundoff error can cause test to fail
+    bt = BallTree(X, leaf_size=5)
+    rad = np.sqrt(((X - query_pt) ** 2).sum(1))
+
+    for r in np.linspace(rad[0], rad[-1], 100):
+        ind, dist = bt.query_radius(query_pt, r + eps, return_distance=True)
+
+        ind = ind[0]
+        dist = dist[0]
+
+        d = np.sqrt(((query_pt - X[ind]) ** 2).sum(1))
+
+        assert_allclose(d, dist)
 
 
 if __name__ == '__main__':
