@@ -726,6 +726,7 @@ cdef class BallTree:
             # >>> print dist  # distances to 3 closest neighbors
             # [ 0.          0.19662693  0.29473397]
         """
+        # XXX: if dualtree, allow X to be a pre-built tree.
         X = np.atleast_1d(np.asarray(X, dtype=DTYPE, order='C'))
 
         if X.shape[-1] != self.data.shape[1]:
@@ -758,8 +759,6 @@ cdef class BallTree:
         self.n_splits = 0
 
         if dualtree:
-            # build a tree on query data with the same metric as self
-            # XXX: make sure this is correct, and allow passing a tree
             other = self.__class__(Xarr, metric=self.dm,
                                    leaf_size=self.leaf_size)
             if breadth_first:
@@ -772,7 +771,6 @@ cdef class BallTree:
 
         else:
             pt = &Xarr[0, 0]
-
             if breadth_first:
                 for i in range(Xarr.shape[0]):
                     self._query_one_breadthfirst(pt, i, heap, nodeheap)
