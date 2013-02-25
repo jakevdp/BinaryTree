@@ -140,9 +140,9 @@ def bench_ball_tree(N=2000, D=3, k=15, leaf_size=30):
                        for i in range(len(ind))]))
 
 
-def bench_KDE(N=1000, D=3, h=0.5):
+def bench_KDE(N=1000, D=3, h=0.5, leaf_size=30):
     X = np.random.random((N, D))
-    bt = BallTree(X)
+    bt = BallTree(X, leaf_size=leaf_size)
     kernel = 'gaussian'
 
     print "Kernel Density:"

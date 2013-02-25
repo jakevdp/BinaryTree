@@ -84,6 +84,8 @@ cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
 #       All kernel functions are normalized such that K(0, h) = 1.
 #       The fully normalized kernel is:
 #         kernel_norm(h, kernel) * compute_kernel(dist, h, kernel)
+#       The code only works with non-negative kernels: i.e. K(d, h) >= 0
+#       for all valid d and h.
 cdef enum KernelType:
     GAUSSIAN_KERNEL = 1
     TOPHAT_KERNEL = 2
@@ -1021,12 +1023,13 @@ cdef class BallTree:
             return indices.reshape(X.shape[:-1])
 
     def kernel_density(BallTree self, X, h, kernel='gaussian',
-                       atol=0, dualtree=False):
+                       atol=0, rtol=0, dualtree=False):
         """
         kernel_density(self, X, h, kernel='gaussian', atol=0, rtol=0,
                        dualtree=False)
 
-        Compute the kernel density estimate of X with the given kernel.
+        Compute the kernel density estimate at points X with the given kernel,
+        using the distance metric specified at tree creation.
 
         Parameters
         ----------
@@ -1053,6 +1056,10 @@ cdef class BallTree:
         """
         cdef DTYPE_t h_c = h
         cdef DTYPE_t atol_c = atol
+        cdef DTYPE_t rtol_c = rtol
+        cdef DTYPE_t min_bound, max_bound
+
+        cdef ITYPE_t n_samples = self.data.shape[0]
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef KernelType kernel_c
 
@@ -1075,10 +1082,10 @@ cdef class BallTree:
         # validate X and prepare for query
         X = np.atleast_1d(np.asarray(X, dtype=DTYPE, order='C'))
 
-        if X.shape[-1] != self.data.shape[1]:
+        if X.shape[-1] != n_features:
             raise ValueError("query data dimension must "
                              "match training data dimension")
-        cdef DTYPE_t[:, ::1] Xarr = X.reshape((-1, self.data.shape[1]))
+        cdef DTYPE_t[:, ::1] Xarr = X.reshape((-1, n_features))
         
         cdef DTYPE_t[::1] density = np.zeros(Xarr.shape[0], dtype=DTYPE)
 
@@ -1094,8 +1101,16 @@ cdef class BallTree:
                                       h_c, atol_c, &density[0])
         else:
             for i in range(Xarr.shape[0]):
-                density[i] = self._kernel_density_one(0, pt, kernel_c,
-                                                      h_c, atol_c, 0)
+                # compute max & min bounds on density within top node
+                min_bound = n_samples * compute_kernel(self.max_dist(0, pt),
+                                                       h_c, kernel_c)
+                max_bound = n_samples * compute_kernel(self.min_dist(0, pt),
+                                                       h_c, kernel_c)
+                self._kernel_density_one(0, pt, kernel_c, h_c,
+                                         atol_c, rtol_c,
+                                         min_bound, max_bound,
+                                         &min_bound, &max_bound)
+                density[i] = 0.5 * (min_bound + max_bound)
                 pt += n_features
 
         # normalize the results
@@ -1513,55 +1528,86 @@ cdef class BallTree:
         return count
 
     cdef DTYPE_t _kernel_density_one(self, ITYPE_t i_node, DTYPE_t* pt,
-                                     KernelType kernel,
-                                     DTYPE_t h, DTYPE_t atol, DTYPE_t dens):
-        cdef ITYPE_t i
+                                     KernelType kernel, DTYPE_t h,
+                                     DTYPE_t atol, DTYPE_t rtol,
+                                     DTYPE_t local_min_bound,
+                                     DTYPE_t local_max_bound,
+                                     DTYPE_t* global_min_bound,
+                                     DTYPE_t* global_max_bound):
+        cdef ITYPE_t i, i1, i2, N1, N2
 
-        # note that atol here is absolute tolerance *per point*
         cdef DTYPE_t* data = &self.data[0, 0]
         cdef ITYPE_t* idx_array = &self.idx_array[0]
         cdef ITYPE_t n_features = self.data.shape[1]
-
-        cdef NodeData_t node_info = self.node_data[i_node]
-        cdef DTYPE_t dist_pt
-
-        # XXX: for efficiency, calculate dist_LB and dist_UB at the same time
-        cdef DTYPE_t dist_LB = self.min_dist(i_node, pt)
-        cdef DTYPE_t dist_UB = self.max_dist(i_node, pt)
-
-        cdef DTYPE_t dens_UB = compute_kernel(dist_LB, h, kernel)
-        cdef DTYPE_t dens_LB = compute_kernel(dist_UB, h, kernel)
         cdef DTYPE_t knorm = kernel_norm(h, kernel)
 
-        #------------------------------------------------------------
-        # Case 1: points are all far enough that contribution is
-        #         zero to machine precision.  Trim the node
-        if knorm * dens_UB <= atol:
-            dens += dens_UB * (node_info.idx_end - node_info.idx_start)
-        
-        #------------------------------------------------------------
-        # Case 2: points are all close enough that the contribution
-        #         is maximal.  Add all points
-        elif knorm * dens_LB >= knorm - atol:
-            dens += dens_LB * (node_info.idx_end - node_info.idx_start)
+        cdef NodeData_t node_info = self.node_data[i_node]
+        cdef DTYPE_t dist_pt, dens_contribution
+
+        cdef DTYPE_t child1_min_bound, child2_min_bound, dist_UB
+        cdef DTYPE_t child1_max_bound, child2_max_bound, dist_LB
+
+        #print (node_info.idx_start, node_info.idx_end)
+        #print (global_min_bound[0], global_max_bound[0],
+        #       local_min_bound, local_max_bound)
 
         #------------------------------------------------------------
-        # Case 3: this is a leaf node.  Add all points
+        # Case 1: local bounds are equal.  Return
+        #   (note: we use inequality for roundoff errors)
+        if local_min_bound >= local_max_bound:
+            pass
+
+        #------------------------------------------------------------
+        # Case 2: global bounds are within rtol & atol. Return
+        elif (knorm * (global_max_bound[0] - global_min_bound[0])
+            <= (atol + rtol * knorm * global_min_bound[0])):
+            pass
+
+        #------------------------------------------------------------
+        # Case 3: node is a leaf. Count contributions from all points
         elif node_info.is_leaf:
+            global_min_bound[0] -= local_min_bound
+            global_max_bound[0] -= local_max_bound
             for i in range(node_info.idx_start, node_info.idx_end):
                 dist_pt = self.dist(pt, (data + n_features * idx_array[i]),
                                     n_features)
-                dens += compute_kernel(dist_pt, h, kernel)
+                dens_contribution = compute_kernel(dist_pt, h, kernel)
+                global_min_bound[0] += dens_contribution
+                global_max_bound[0] += dens_contribution
 
         #------------------------------------------------------------
-        # Case 4: node needs to be split: recursively query subnodes
+        # Case 4: split node and query subnodes
         else:
-            dens = self._kernel_density_one(2 * i_node + 1, pt,
-                                            kernel, h, atol, dens)
-            dens = self._kernel_density_one(2 * i_node + 2, pt,
-                                            kernel, h, atol, dens)
+            i1 = 2 * i_node + 1
+            i2 = 2 * i_node + 2
 
-        return dens
+            N1 = self.node_data[i1].idx_end - self.node_data[i1].idx_start
+            N2 = self.node_data[i2].idx_end - self.node_data[i2].idx_start
+            
+            # XXX: for efficiency, compute min & max bounds at the same time
+            child1_min_bound = N1 * compute_kernel(self.max_dist(i1, pt),
+                                                   h, kernel)
+            child1_max_bound = N1 * compute_kernel(self.min_dist(i1, pt),
+                                                   h, kernel)
+            child2_min_bound = N2 * compute_kernel(self.max_dist(i2, pt),
+                                                   h, kernel)
+            child2_max_bound = N2 * compute_kernel(self.min_dist(i2, pt),
+                                                   h, kernel)
+            
+            global_min_bound[0] += (child1_min_bound + child2_min_bound
+                                    - local_min_bound)
+            global_max_bound[0] += (child1_max_bound + child2_max_bound
+                                    - local_max_bound)
+
+            self._kernel_density_one(i1, pt, kernel, h,
+                                     atol, rtol,
+                                     child1_min_bound, child1_max_bound,
+                                     global_min_bound, global_max_bound)
+            self._kernel_density_one(i2, pt, kernel, h,
+                                     atol, rtol,
+                                     child2_min_bound, child2_max_bound,
+                                     global_min_bound, global_max_bound)
+
 
     cdef void _kernel_density_dual(BallTree self, ITYPE_t i_node1,
                                    BallTree other, ITYPE_t i_node2,
