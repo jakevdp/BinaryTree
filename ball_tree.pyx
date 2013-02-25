@@ -36,6 +36,7 @@ DTYPE = np.asarray(ddummy_view).dtype
 
 cdef DTYPE_t INF = np.inf
 cdef DTYPE_t PI = np.pi
+cdef DTYPE_t ROOT_2PI = sqrt(2 * PI)
 
 ######################################################################
 # Inline distance functions
@@ -123,21 +124,36 @@ cdef inline DTYPE_t cosine_kernel(DTYPE_t dist, DTYPE_t h):
         return cos(0.5 * PI * dist / h)
     else:
         return 0.0
- 
 
-cdef inline DTYPE_t compute_kernel(DTYPE_t dist, DTYPE_t h, KernelType k):
-    if k == GAUSSIAN_KERNEL:
+cdef inline DTYPE_t compute_kernel(DTYPE_t dist, DTYPE_t h,
+                                   KernelType kernel):
+    if kernel == GAUSSIAN_KERNEL:
         return gaussian_kernel(dist, h)
-    elif k == TOPHAT_KERNEL:
+    elif kernel == TOPHAT_KERNEL:
         return tophat_kernel(dist, h)
-    if k == EPANECHNIKOV_KERNEL:
+    if kernel == EPANECHNIKOV_KERNEL:
         return epanechnikov_kernel(dist, h)
-    elif k == EXPONENTIAL_KERNEL:
+    elif kernel == EXPONENTIAL_KERNEL:
         return exponential_kernel(dist, h)
-    if k == LINEAR_KERNEL:
+    if kernel == LINEAR_KERNEL:
         return linear_kernel(dist, h)
-    elif k == COSINE_KERNEL:
+    elif kernel == COSINE_KERNEL:
         return cosine_kernel(dist, h)
+
+cdef inline DTYPE_t normalize_kernel(DTYPE_t K,
+                                     KernelType kernel):
+    if kernel == GAUSSIAN_KERNEL:
+        return K / ROOT_2PI
+    elif kernel == TOPHAT_KERNEL:
+        return K * 0.5
+    if kernel == EPANECHNIKOV_KERNEL:
+        return K * 0.75
+    elif kernel == EXPONENTIAL_KERNEL:
+        return K * 0.5
+    if kernel == LINEAR_KERNEL:
+        return K
+    elif kernel == COSINE_KERNEL:
+        return K * 0.25 * PI
 
 ######################################################################
 # Distance Metric Classes
@@ -1002,7 +1018,7 @@ cdef class BallTree:
             return indices.reshape(X.shape[:-1])
 
     def kernel_density(BallTree self, X, h, kernel='gaussian',
-                       atol=0, rtol=0, dualtree=False):
+                       atol=0, rtol=0, dualtree=False, normalize=True):
         cdef DTYPE_t h_c = h
         cdef DTYPE_t atol_c = atol
         cdef DTYPE_t rtol_c = rtol
@@ -1050,6 +1066,10 @@ cdef class BallTree:
                 density[i] = self._kernel_density_one(0, pt, kernel_c,
                                                       h_c, atol_c, 0)
                 pt += n_features
+
+        if normalize:
+            for i in range(density.shape[0]):
+                density[i] = normalize_kernel(density[i], kernel_c)
 
         return np.asarray(density).reshape(X.shape[:-1])
 
