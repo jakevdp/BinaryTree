@@ -946,7 +946,7 @@ cdef class BallTree:
         else:
             return indices.reshape(X.shape[:-1])
 
-    def kernel_density(BallTree self, X, h, atol=0, rtol=0):
+    def kernel_density(BallTree self, X, h, atol=0, rtol=0, dualtree=False):
         cdef DTYPE_t h_c = h
         cdef DTYPE_t atol_c = atol
         cdef DTYPE_t rtol_c = rtol
@@ -967,9 +967,14 @@ cdef class BallTree:
         # scale error to an error per point
         atol_c /= self.data.shape[0]
 
-        for i in range(Xarr.shape[0]):
-            density[i] = self._kernel_density_one(0, pt, h, atol_c, 0)
-            pt += n_features
+        if dualtree:
+            other = self.__class__(Xarr, metric=self.dm,
+                                   leaf_size=self.leaf_size)
+            self._kernel_density_dual(0, other, 0, h_c, atol_c, &density[0])
+        else:
+            for i in range(Xarr.shape[0]):
+                density[i] = self._kernel_density_one(0, pt, h_c, atol_c, 0)
+                pt += n_features
 
         return np.asarray(density).reshape(X.shape[:-1])
 
@@ -1382,6 +1387,8 @@ cdef class BallTree:
 
     cdef DTYPE_t _kernel_density_one(self, ITYPE_t i_node, DTYPE_t* pt,
                                      DTYPE_t h, DTYPE_t atol, DTYPE_t dens):
+        cdef ITYPE_t i
+
         # note that atol here is absolute tolerance *per point*
         cdef DTYPE_t* data = &self.data[0, 0]
         cdef ITYPE_t* idx_array = &self.idx_array[0]
@@ -1418,12 +1425,85 @@ cdef class BallTree:
                 dens += square_exp_kernel_rdist(dist_pt, h)
 
         #------------------------------------------------------------
-        # Case 4: recursively query subnodes
+        # Case 4: node needs to be split: recursively query subnodes
         else:
             dens = self._kernel_density_one(2 * i_node + 1, pt, h, atol, dens)
             dens = self._kernel_density_one(2 * i_node + 2, pt, h, atol, dens)
 
         return dens
+
+    cdef void _kernel_density_dual(BallTree self, ITYPE_t i_node1,
+                                   BallTree other, ITYPE_t i_node2,
+                                   DTYPE_t h, DTYPE_t atol,
+                                   DTYPE_t* density):
+        cdef ITYPE_t i1, i2
+
+        # note that atol here is absolute tolerance *per point*
+        cdef DTYPE_t* data1 = &self.data[0, 0]
+        cdef DTYPE_t* data2 = &other.data[0, 0]
+
+        cdef ITYPE_t* idx_array1 = &self.idx_array[0]
+        cdef ITYPE_t* idx_array2 = &other.idx_array[0]
+
+        cdef ITYPE_t n_features = self.data.shape[1]
+
+        cdef NodeData_t node_info1 = self.node_data[i_node1]
+        cdef NodeData_t node_info2 = other.node_data[i_node2]
+        cdef DTYPE_t dist_pt
+
+        # XXX: for efficiency, calculate dist_LB and dist_UB at the same time
+        cdef DTYPE_t dist_LB = self.min_dist_dual(i_node1, other, i_node2)
+        cdef DTYPE_t dist_UB = self.max_dist_dual(i_node1, other, i_node2)
+
+        cdef DTYPE_t dens_UB = square_exp_kernel(dist_LB, h)
+        cdef DTYPE_t dens_LB = square_exp_kernel(dist_UB, h)
+
+        #------------------------------------------------------------
+        # Case 1: points are all far enough that contribution is zero
+        #         to within the desired tolerance
+        if dens_UB <= atol:
+            dens_UB *= (node_info1.idx_end - node_info1.idx_start)
+            for i2 in range(node_info2.idx_start, node_info2.idx_end):
+                density[idx_array2[i2]] += dens_UB
+        
+        #------------------------------------------------------------
+        # Case 2: points are all close enough that the contribution
+        #         is maximal to within the desired tolerance
+        elif dens_LB >= 1.0 - atol:
+            dens_LB *= (node_info1.idx_end - node_info1.idx_start)
+            for i2 in range(node_info2.idx_start, node_info2.idx_end):
+                density[idx_array2[i2]] += dens_LB
+
+        #------------------------------------------------------------
+        # Case 3: both nodes are leaves: go through all pairs
+        elif node_info1.is_leaf and node_info2.is_leaf:
+            for i2 in range(node_info2.idx_start, node_info2.idx_end):
+                for i1 in range(node_info1.idx_start, node_info1.idx_end):
+                    dist_pt = self.rdist(data1 + n_features * idx_array1[i1],
+                                         data2 + n_features * idx_array2[i2],
+                                         n_features)
+                    density[idx_array2[i2]] += square_exp_kernel_rdist(dist_pt,
+                                                                       h)
+
+        #------------------------------------------------------------
+        # Case 4a: only one node is a leaf: split the other
+        elif node_info1.is_leaf:
+            for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
+                self._kernel_density_dual(i_node1, other, i2,
+                                          h, atol, density)
+
+        elif node_info2.is_leaf:
+            for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
+                self._kernel_density_dual(i1, other, i_node2,
+                                          h, atol, density)
+
+        #------------------------------------------------------------
+        # Case 4b: both nodes need to be split
+        else:
+            for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
+                for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
+                    self._kernel_density_dual(i1, other, i2,
+                                              h, atol, density)
 
     #----------------------------------------------------------------------
     # The following methods can be changed to produce a different tree type
