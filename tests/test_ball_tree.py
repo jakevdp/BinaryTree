@@ -72,31 +72,45 @@ def test_ball_tree_query_radius_distance(n_samples=100, n_features=10):
 
         assert_allclose(d, dist)
 
+
+def compute_kernel_slow(Y, X, kernel, h):
+    d = np.sqrt(((Y[:, None, :] - X) ** 2).sum(-1))
+
+    if kernel == 'gaussian':
+        return (1. / (h * np.sqrt(2 * np.pi))) * np.exp(-0.5 * (d * d)
+                                                         / (h * h)).sum(-1)
+    elif kernel == 'tophat':
+        return (0.5 / h) * (d < h).sum(-1)
+    elif kernel == 'epanechnikov':
+        return (0.75 / h) * ((1.0 - (d * d) / (h * h)) * (d < h)).sum(-1)
+    elif kernel == 'exponential':
+        return (0.5 / h) * (np.exp(-d / h) * (d < h)).sum(-1)
+    elif kernel == 'linear':
+        return (1. / h) * ((1 - d / h) * (d < h)).sum(-1)
+    elif kernel == 'cosine':
+        return (0.25 * np.pi / h) * (np.cos(0.5 * np.pi * d / h)
+                                     * (d < h)).sum(-1)
+    else:
+        raise ValueError('kernel not recognized')
+    
+
 def test_ball_tree_KDE(n_samples=100, n_features=3):
     X = np.random.random((n_samples, n_features))
     Y = np.random.random((n_samples, n_features))
     bt = BallTree(X, leaf_size=10)
 
-    for h in [0.001, 0.01, 0.1, 1.0]:
-        d = Y[:, None, :] - X
-        d2 = (d * d).sum(-1)
-        dens_gauss = np.exp(-0.5 * d2 / h ** 2).sum(-1)
-        dens_gauss /= h * np.sqrt(2 * np.pi)
-        def check_results_gauss(h, atol, dualtree):
-            dens = bt.kernel_density(Y, h, dualtree=dualtree, atol=atol,
-                                     kernel='gaussian')
-            assert_allclose(dens, dens_gauss, atol=atol, rtol=1E-10)
+    for kernel in ['gaussian', 'tophat', 'epanechnikov',
+                   'exponential', 'linear', 'cosine']:
+        for h in [0.001, 0.01, 0.1, 1.0]:
+            dens_true = compute_kernel_slow(Y, X, kernel, h)
+            def check_results(kernel, h, atol, dualtree):
+                dens = bt.kernel_density(Y, h, dualtree=dualtree,
+                                         atol=atol, kernel=kernel)
+                assert_allclose(dens, dens_true, atol=atol, rtol=1E-10)
 
-        dens_tophat = (0.5 / h) * (d2 < h ** 2).sum(-1)
-        def check_results_tophat(h, atol, dualtree):
-            dens = bt.kernel_density(Y, h, dualtree=dualtree, atol=atol,
-                                     kernel='tophat')
-            assert_allclose(dens, dens_tophat, atol=atol, rtol=1E-10)
-
-        for atol in [0, 1E-5, 0.1]:
-            for dualtree in (True, False):
-                yield check_results_gauss, h, atol, dualtree
-                yield check_results_tophat, h, atol, dualtree
+            for atol in [0, 1E-5, 0.1]:
+                for dualtree in (True, False):
+                    yield check_results, kernel, h, atol, dualtree
 
 
 if __name__ == '__main__':
