@@ -140,20 +140,20 @@ cdef inline DTYPE_t compute_kernel(DTYPE_t dist, DTYPE_t h,
     elif kernel == COSINE_KERNEL:
         return cosine_kernel(dist, h)
 
-cdef inline DTYPE_t normalize_kernel(DTYPE_t K,
+cdef inline DTYPE_t normalize_kernel(DTYPE_t K, DTYPE_t h,
                                      KernelType kernel):
     if kernel == GAUSSIAN_KERNEL:
-        return K / ROOT_2PI
+        return K / (h * ROOT_2PI)
     elif kernel == TOPHAT_KERNEL:
-        return K * 0.5
+        return K * 0.5 / h
     if kernel == EPANECHNIKOV_KERNEL:
-        return K * 0.75
+        return K * 0.75 / h
     elif kernel == EXPONENTIAL_KERNEL:
-        return K * 0.5
+        return K * 0.5 / h
     if kernel == LINEAR_KERNEL:
-        return K
+        return K / h
     elif kernel == COSINE_KERNEL:
-        return K * 0.25 * PI
+        return K * 0.25 * PI / h
 
 ######################################################################
 # Distance Metric Classes
@@ -1055,6 +1055,8 @@ cdef class BallTree:
 
         # scale error to an error per point
         atol_c /= self.data.shape[0]
+        if normalize:
+            atol_c /= normalize_kernel(1, h, kernel_c)
 
         if dualtree:
             other = self.__class__(Xarr, metric=self.dm,
@@ -1069,7 +1071,7 @@ cdef class BallTree:
 
         if normalize:
             for i in range(density.shape[0]):
-                density[i] = normalize_kernel(density[i], kernel_c)
+                density[i] = normalize_kernel(density[i], h, kernel_c)
 
         return np.asarray(density).reshape(X.shape[:-1])
 

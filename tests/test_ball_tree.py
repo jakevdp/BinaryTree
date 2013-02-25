@@ -81,13 +81,13 @@ def test_ball_tree_KDE(n_samples=100, n_features=3):
         d = Y[:, None, :] - X
         d2 = (d * d).sum(-1)
         dens_gauss = np.exp(-0.5 * d2 / h ** 2).sum(-1)
-        dens_gauss *= (1. / np.sqrt(2 * np.pi))
+        dens_gauss /= h * np.sqrt(2 * np.pi)
         def check_results_gauss(h, atol, dualtree):
             dens = bt.kernel_density(Y, h, dualtree=dualtree, atol=atol,
                                      kernel='gaussian')
             assert_allclose(dens, dens_gauss, atol=atol, rtol=1E-10)
 
-        dens_tophat = 0.5 * (d2 < h ** 2).sum(-1)
+        dens_tophat = (0.5 / h) * (d2 < h ** 2).sum(-1)
         def check_results_tophat(h, atol, dualtree):
             dens = bt.kernel_density(Y, h, dualtree=dualtree, atol=atol,
                                      kernel='tophat')
