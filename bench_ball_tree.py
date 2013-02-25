@@ -143,25 +143,27 @@ def bench_ball_tree(N=2000, D=3, k=15, leaf_size=30):
 def bench_KDE(N=1000, D=3, h=0.5):
     X = np.random.random((N, D))
     bt = BallTree(X)
+    kernel = 'gaussian'
 
     print "Kernel Density:"
     atol = 1E-10
 
     for h in [0.001, 0.01, 0.1]:
-
         t0 = time()
         dens_true = np.exp(-0.5 * ((X[:, None, :]
                                     - X) ** 2).sum(-1) / h ** 2).sum(-1)
 
         bt.reset_n_calls()
         t1 = time()
-        dens1 = bt.kernel_density(X, h, atol=atol, dualtree=False)
+        dens1 = bt.kernel_density(X, h, atol=atol,
+                                  dualtree=False, kernel=kernel)
         t2 = time()
         n1 = bt.get_n_calls()
 
         bt.reset_n_calls()
         t3 = time()
-        dens2 = bt.kernel_density(X, h, atol=atol, dualtree=True)
+        dens2 = bt.kernel_density(X, h, atol=atol,
+                                  dualtree=True, kernel=kernel)
         t4 = time()
         n2 = bt.get_n_calls()
 

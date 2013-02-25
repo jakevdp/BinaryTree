@@ -5,7 +5,7 @@
 
 cimport cython
 cimport numpy as np
-from libc.math cimport fmax, fmin, fabs, sqrt, exp
+from libc.math cimport fmax, fmin, fabs, sqrt, exp, cos
 
 import numpy as np
 import warnings
@@ -35,6 +35,7 @@ cdef DTYPE_t[:] ddummy_view = <DTYPE_t[:1]> &ddummy
 DTYPE = np.asarray(ddummy_view).dtype
 
 cdef DTYPE_t INF = np.inf
+cdef DTYPE_t PI = np.pi
 
 ######################################################################
 # Inline distance functions
@@ -77,12 +78,66 @@ cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
 
 ######################################################################
 # Kernel functions
-cdef inline DTYPE_t square_exp_kernel(DTYPE_t dist, DTYPE_t h):
+#
+# Note: these are not normalized.  The ball tree KDE results depend
+#       on kernels having K(0) = 1 and K(inf) = 0.  Results can be
+#       normalized after the fact.  Kernels also assume both dist and
+#       h are non-negative.
+cdef enum KernelType:
+    GAUSSIAN_KERNEL = 1
+    TOPHAT_KERNEL = 2
+    EPANECHNIKOV_KERNEL = 3
+    EXPONENTIAL_KERNEL = 4
+    LINEAR_KERNEL = 5
+    COSINE_KERNEL = 6
+
+cdef inline DTYPE_t gaussian_kernel(DTYPE_t dist, DTYPE_t h):
     return exp(-0.5 * (dist * dist) / (h * h))
 
-cdef inline DTYPE_t square_exp_kernel_rdist(DTYPE_t rdist, DTYPE_t h):
-    return exp(-0.5 * rdist / (h * h))
+cdef inline DTYPE_t tophat_kernel(DTYPE_t dist, DTYPE_t h):
+    if dist < h:
+        return 1.0
+    else:
+        return 0.0
 
+cdef inline DTYPE_t epanechnikov_kernel(DTYPE_t dist, DTYPE_t h):
+    if dist < h:
+        return 1.0 - (dist * dist) / (h * h)
+    else:
+        return 0.0
+
+cdef inline DTYPE_t exponential_kernel(DTYPE_t dist, DTYPE_t h):
+    if dist < h:
+        return exp(-dist / h)
+    else:
+        return 0.0
+
+cdef inline DTYPE_t linear_kernel(DTYPE_t dist, DTYPE_t h):
+    if dist < h:
+        return 1 - dist / h
+    else:
+        return 0.0
+
+cdef inline DTYPE_t cosine_kernel(DTYPE_t dist, DTYPE_t h):
+    if dist < h:
+        return cos(0.5 * PI * dist / h)
+    else:
+        return 0.0
+ 
+
+cdef inline DTYPE_t compute_kernel(DTYPE_t dist, DTYPE_t h, KernelType k):
+    if k == GAUSSIAN_KERNEL:
+        return gaussian_kernel(dist, h)
+    elif k == TOPHAT_KERNEL:
+        return tophat_kernel(dist, h)
+    if k == EPANECHNIKOV_KERNEL:
+        return epanechnikov_kernel(dist, h)
+    elif k == EXPONENTIAL_KERNEL:
+        return exponential_kernel(dist, h)
+    if k == LINEAR_KERNEL:
+        return linear_kernel(dist, h)
+    elif k == COSINE_KERNEL:
+        return cosine_kernel(dist, h)
 
 ######################################################################
 # Distance Metric Classes
@@ -946,11 +1001,29 @@ cdef class BallTree:
         else:
             return indices.reshape(X.shape[:-1])
 
-    def kernel_density(BallTree self, X, h, atol=0, rtol=0, dualtree=False):
+    def kernel_density(BallTree self, X, h, kernel='gaussian',
+                       atol=0, rtol=0, dualtree=False):
         cdef DTYPE_t h_c = h
         cdef DTYPE_t atol_c = atol
         cdef DTYPE_t rtol_c = rtol
         cdef ITYPE_t n_features = self.data.shape[1]
+        cdef KernelType kernel_c
+
+        # validate kernel
+        if kernel == 'gaussian':
+            kernel_c = GAUSSIAN_KERNEL
+        elif kernel == 'tophat':
+            kernel_c = TOPHAT_KERNEL
+        elif kernel == 'epanechnikov':
+            kernel_c = EPANECHNIKOV_KERNEL
+        elif kernel == 'exponential':
+            kernel_c = EXPONENTIAL_KERNEL
+        elif kernel == 'linear':
+            kernel_c = LINEAR_KERNEL
+        elif kernel == 'cosine':
+            kernel_c = COSINE_KERNEL
+        else:
+            raise ValueError("kernel = '%s' not recognized" % kernel)
 
         # validate X and prepare for query
         X = np.atleast_1d(np.asarray(X, dtype=DTYPE, order='C'))
@@ -970,10 +1043,12 @@ cdef class BallTree:
         if dualtree:
             other = self.__class__(Xarr, metric=self.dm,
                                    leaf_size=self.leaf_size)
-            self._kernel_density_dual(0, other, 0, h_c, atol_c, &density[0])
+            self._kernel_density_dual(0, other, 0, kernel_c,
+                                      h_c, atol_c, &density[0])
         else:
             for i in range(Xarr.shape[0]):
-                density[i] = self._kernel_density_one(0, pt, h_c, atol_c, 0)
+                density[i] = self._kernel_density_one(0, pt, kernel_c,
+                                                      h_c, atol_c, 0)
                 pt += n_features
 
         return np.asarray(density).reshape(X.shape[:-1])
@@ -1386,6 +1461,7 @@ cdef class BallTree:
         return count
 
     cdef DTYPE_t _kernel_density_one(self, ITYPE_t i_node, DTYPE_t* pt,
+                                     KernelType kernel,
                                      DTYPE_t h, DTYPE_t atol, DTYPE_t dens):
         cdef ITYPE_t i
 
@@ -1401,8 +1477,8 @@ cdef class BallTree:
         cdef DTYPE_t dist_LB = self.min_dist(i_node, pt)
         cdef DTYPE_t dist_UB = self.max_dist(i_node, pt)
 
-        cdef DTYPE_t dens_UB = square_exp_kernel(dist_LB, h)
-        cdef DTYPE_t dens_LB = square_exp_kernel(dist_UB, h)
+        cdef DTYPE_t dens_UB = compute_kernel(dist_LB, h, kernel)
+        cdef DTYPE_t dens_LB = compute_kernel(dist_UB, h, kernel)
 
         #------------------------------------------------------------
         # Case 1: points are all far enough that contribution is
@@ -1420,20 +1496,23 @@ cdef class BallTree:
         # Case 3: this is a leaf node.  Add all points
         elif node_info.is_leaf:
             for i in range(node_info.idx_start, node_info.idx_end):
-                dist_pt = self.rdist(pt, (data + n_features * idx_array[i]),
-                                     n_features)
-                dens += square_exp_kernel_rdist(dist_pt, h)
+                dist_pt = self.dist(pt, (data + n_features * idx_array[i]),
+                                    n_features)
+                dens += compute_kernel(dist_pt, h, kernel)
 
         #------------------------------------------------------------
         # Case 4: node needs to be split: recursively query subnodes
         else:
-            dens = self._kernel_density_one(2 * i_node + 1, pt, h, atol, dens)
-            dens = self._kernel_density_one(2 * i_node + 2, pt, h, atol, dens)
+            dens = self._kernel_density_one(2 * i_node + 1, pt,
+                                            kernel, h, atol, dens)
+            dens = self._kernel_density_one(2 * i_node + 2, pt,
+                                            kernel, h, atol, dens)
 
         return dens
 
     cdef void _kernel_density_dual(BallTree self, ITYPE_t i_node1,
                                    BallTree other, ITYPE_t i_node2,
+                                   KernelType kernel,
                                    DTYPE_t h, DTYPE_t atol,
                                    DTYPE_t* density):
         cdef ITYPE_t i1, i2
@@ -1455,8 +1534,8 @@ cdef class BallTree:
         cdef DTYPE_t dist_LB = self.min_dist_dual(i_node1, other, i_node2)
         cdef DTYPE_t dist_UB = self.max_dist_dual(i_node1, other, i_node2)
 
-        cdef DTYPE_t dens_UB = square_exp_kernel(dist_LB, h)
-        cdef DTYPE_t dens_LB = square_exp_kernel(dist_UB, h)
+        cdef DTYPE_t dens_UB = compute_kernel(dist_LB, h, kernel)
+        cdef DTYPE_t dens_LB = compute_kernel(dist_UB, h, kernel)
 
         #------------------------------------------------------------
         # Case 1: points are all far enough that contribution is zero
@@ -1479,22 +1558,22 @@ cdef class BallTree:
         elif node_info1.is_leaf and node_info2.is_leaf:
             for i2 in range(node_info2.idx_start, node_info2.idx_end):
                 for i1 in range(node_info1.idx_start, node_info1.idx_end):
-                    dist_pt = self.rdist(data1 + n_features * idx_array1[i1],
-                                         data2 + n_features * idx_array2[i2],
-                                         n_features)
-                    density[idx_array2[i2]] += square_exp_kernel_rdist(dist_pt,
-                                                                       h)
+                    dist_pt = self.dist(data1 + n_features * idx_array1[i1],
+                                        data2 + n_features * idx_array2[i2],
+                                        n_features)
+                    density[idx_array2[i2]] += compute_kernel(dist_pt, h,
+                                                              kernel)
 
         #------------------------------------------------------------
         # Case 4a: only one node is a leaf: split the other
         elif node_info1.is_leaf:
             for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
-                self._kernel_density_dual(i_node1, other, i2,
+                self._kernel_density_dual(i_node1, other, i2, kernel,
                                           h, atol, density)
 
         elif node_info2.is_leaf:
             for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
-                self._kernel_density_dual(i1, other, i_node2,
+                self._kernel_density_dual(i1, other, i_node2, kernel,
                                           h, atol, density)
 
         #------------------------------------------------------------
@@ -1502,7 +1581,7 @@ cdef class BallTree:
         else:
             for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
                 for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
-                    self._kernel_density_dual(i1, other, i2,
+                    self._kernel_density_dual(i1, other, i2, kernel,
                                               h, atol, density)
 
     #----------------------------------------------------------------------
