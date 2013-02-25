@@ -140,8 +140,32 @@ def bench_ball_tree(N=2000, D=3, k=15, leaf_size=30):
                        for i in range(len(ind))]))
 
 
+def bench_KDE(N=1000, D=3, h=0.5):
+    X = np.random.random((N, D))
+    bt = BallTree(X)
+
+    print "Kernel Density:"
+    atol = 1E-10
+
+    for h in [0.001, 0.01, 0.1, 1.0]:
+        bt.reset_n_calls()
+
+        t0 = time()
+        dens2 = np.exp(-0.5 * ((X[:, None, :]
+                                - X) ** 2).sum(-1) / h ** 2).sum(-1)
+        t1 = time()
+        dens = bt.kernel_density(X, h, atol=atol)
+        t2 = time()
+
+        print " h = %.3f" % h
+        print "   brute force: %.2g sec (%i calls)" % (t1 - t0, N * N)
+        print "   tree: %.2g sec (%i calls)" % (t2 - t1, bt.get_n_calls())
+        print "   distances match:", np.allclose(dens, dens2, atol=atol)
+
+
 if __name__ == '__main__':
     bench_simultaneous_sort()
     bench_neighbors_heap()
     bench_euclidean_dist()
     bench_ball_tree()
+    bench_KDE()

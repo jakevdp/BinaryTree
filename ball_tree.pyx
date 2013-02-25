@@ -5,7 +5,7 @@
 
 cimport cython
 cimport numpy as np
-from libc.math cimport fmax, fmin, fabs, sqrt
+from libc.math cimport fmax, fmin, fabs, sqrt, exp
 
 import numpy as np
 import warnings
@@ -73,6 +73,15 @@ cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
         for i2 in range(Y.shape[0]):
             D[i1, i2] = euclidean_dist(&X[i1, 0], &Y[i2, 0], X.shape[1])
     return D
+
+
+######################################################################
+# Kernel functions
+cdef inline DTYPE_t square_exp_kernel(DTYPE_t dist, DTYPE_t h):
+    return exp(-0.5 * (dist * dist) / (h * h))
+
+cdef inline DTYPE_t square_exp_kernel_rdist(DTYPE_t rdist, DTYPE_t h):
+    return exp(-0.5 * rdist / (h * h))
 
 
 ######################################################################
@@ -937,6 +946,33 @@ cdef class BallTree:
         else:
             return indices.reshape(X.shape[:-1])
 
+    def kernel_density(BallTree self, X, h, atol=0, rtol=0):
+        cdef DTYPE_t h_c = h
+        cdef DTYPE_t atol_c = atol
+        cdef DTYPE_t rtol_c = rtol
+        cdef ITYPE_t n_features = self.data.shape[1]
+
+        # validate X and prepare for query
+        X = np.atleast_1d(np.asarray(X, dtype=DTYPE, order='C'))
+
+        if X.shape[-1] != self.data.shape[1]:
+            raise ValueError("query data dimension must "
+                             "match training data dimension")
+        cdef DTYPE_t[:, ::1] Xarr = X.reshape((-1, self.data.shape[1]))
+        
+        cdef DTYPE_t[::1] density = np.zeros(Xarr.shape[0], dtype=DTYPE)
+
+        cdef DTYPE_t* pt = &Xarr[0, 0]
+
+        # scale error to an error per point
+        atol_c /= self.data.shape[0]
+
+        for i in range(Xarr.shape[0]):
+            density[i] = self._kernel_density_one(0, pt, h, atol_c, 0)
+            pt += n_features
+
+        return np.asarray(density).reshape(X.shape[:-1])
+
     cdef void _query_one_depthfirst(BallTree self, ITYPE_t i_node,
                                     DTYPE_t* pt, ITYPE_t i_pt,
                                     NeighborsHeap heap,
@@ -1343,6 +1379,51 @@ cdef class BallTree:
                                            count_only, return_distance)
 
         return count
+
+    cdef DTYPE_t _kernel_density_one(self, ITYPE_t i_node, DTYPE_t* pt,
+                                     DTYPE_t h, DTYPE_t atol, DTYPE_t dens):
+        # note that atol here is absolute tolerance *per point*
+        cdef DTYPE_t* data = &self.data[0, 0]
+        cdef ITYPE_t* idx_array = &self.idx_array[0]
+        cdef ITYPE_t n_features = self.data.shape[1]
+
+        cdef NodeData_t node_info = self.node_data[i_node]
+        cdef DTYPE_t dist_pt
+
+        # XXX: for efficiency, calculate dist_LB and dist_UB at the same time
+        cdef DTYPE_t dist_LB = self.min_dist(i_node, pt)
+        cdef DTYPE_t dist_UB = self.max_dist(i_node, pt)
+
+        cdef DTYPE_t dens_UB = square_exp_kernel(dist_LB, h)
+        cdef DTYPE_t dens_LB = square_exp_kernel(dist_UB, h)
+
+        #------------------------------------------------------------
+        # Case 1: points are all far enough that contribution is
+        #         zero to machine precision.  Trim the node
+        if dens_UB <= atol:
+            dens += dens_UB * (node_info.idx_end - node_info.idx_start)
+        
+        #------------------------------------------------------------
+        # Case 2: points are all close enough that the contribution
+        #         is maximal.  Add all points
+        elif dens_LB >= 1.0 - atol:
+            dens += dens_LB * (node_info.idx_end - node_info.idx_start)
+
+        #------------------------------------------------------------
+        # Case 3: this is a leaf node.  Add all points
+        elif node_info.is_leaf:
+            for i in range(node_info.idx_start, node_info.idx_end):
+                dist_pt = self.rdist(pt, (data + n_features * idx_array[i]),
+                                     n_features)
+                dens += square_exp_kernel_rdist(dist_pt, h)
+
+        #------------------------------------------------------------
+        # Case 4: recursively query subnodes
+        else:
+            dens = self._kernel_density_one(2 * i_node + 1, pt, h, atol, dens)
+            dens = self._kernel_density_one(2 * i_node + 2, pt, h, atol, dens)
+
+        return dens
 
     #----------------------------------------------------------------------
     # The following methods can be changed to produce a different tree type

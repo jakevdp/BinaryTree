@@ -72,6 +72,20 @@ def test_ball_tree_query_radius_distance(n_samples=100, n_features=10):
 
         assert_allclose(d, dist)
 
+def test_ball_tree_KDE(n_samples=100, n_features=3):
+    X = np.random.random((n_samples, n_features))
+    bt = BallTree(X, leaf_size=10)
+
+    for h in [0.001, 0.01, 0.1, 1.0]:
+        d = X[:, None, :] - X
+        dens_true = np.exp(-0.5 * (d ** 2).sum(-1) / h ** 2).sum(-1)
+        def check_results(h, atol):
+            dens = bt.kernel_density(X, h, atol=atol)
+            assert_allclose(dens, dens_true, atol=atol, rtol=1E-10)
+
+        for atol in [0, 1E-5, 0.1]:
+            yield check_results, h, atol
+
 
 if __name__ == '__main__':
     import nose
