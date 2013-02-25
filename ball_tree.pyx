@@ -80,10 +80,7 @@ cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
 ######################################################################
 # Kernel functions
 #
-# Note: these are not normalized.  The ball tree KDE results depend
-#       on kernels having K(0) = 1 and K(inf) = 0.  Results can be
-#       normalized after the fact.  Kernels also assume both dist and
-#       h are non-negative.
+# Note: Kernels assume dist is non-negative and and h is positive
 cdef enum KernelType:
     GAUSSIAN_KERNEL = 1
     TOPHAT_KERNEL = 2
@@ -93,35 +90,35 @@ cdef enum KernelType:
     COSINE_KERNEL = 6
 
 cdef inline DTYPE_t gaussian_kernel(DTYPE_t dist, DTYPE_t h):
-    return exp(-0.5 * (dist * dist) / (h * h))
+    return (1. / (h * ROOT_2PI)) * exp(-0.5 * (dist * dist) / (h * h))
 
 cdef inline DTYPE_t tophat_kernel(DTYPE_t dist, DTYPE_t h):
     if dist < h:
-        return 1.0
+        return 0.5 / h
     else:
         return 0.0
 
 cdef inline DTYPE_t epanechnikov_kernel(DTYPE_t dist, DTYPE_t h):
     if dist < h:
-        return 1.0 - (dist * dist) / (h * h)
+        return (0.75 / h) * (1.0 - (dist * dist) / (h * h))
     else:
         return 0.0
 
 cdef inline DTYPE_t exponential_kernel(DTYPE_t dist, DTYPE_t h):
     if dist < h:
-        return exp(-dist / h)
+        return (0.5 / h) * exp(-dist / h)
     else:
         return 0.0
 
 cdef inline DTYPE_t linear_kernel(DTYPE_t dist, DTYPE_t h):
     if dist < h:
-        return 1 - dist / h
+        return (1. / h) * (1 - dist / h)
     else:
         return 0.0
 
 cdef inline DTYPE_t cosine_kernel(DTYPE_t dist, DTYPE_t h):
     if dist < h:
-        return cos(0.5 * PI * dist / h)
+        return (0.25 * PI / h) * cos(0.5 * PI * dist / h)
     else:
         return 0.0
 
@@ -140,20 +137,6 @@ cdef inline DTYPE_t compute_kernel(DTYPE_t dist, DTYPE_t h,
     elif kernel == COSINE_KERNEL:
         return cosine_kernel(dist, h)
 
-cdef inline DTYPE_t normalize_kernel(DTYPE_t K, DTYPE_t h,
-                                     KernelType kernel):
-    if kernel == GAUSSIAN_KERNEL:
-        return K / (h * ROOT_2PI)
-    elif kernel == TOPHAT_KERNEL:
-        return K * 0.5 / h
-    if kernel == EPANECHNIKOV_KERNEL:
-        return K * 0.75 / h
-    elif kernel == EXPONENTIAL_KERNEL:
-        return K * 0.5 / h
-    if kernel == LINEAR_KERNEL:
-        return K / h
-    elif kernel == COSINE_KERNEL:
-        return K * 0.25 * PI / h
 
 ######################################################################
 # Distance Metric Classes
@@ -885,8 +868,9 @@ cdef class BallTree:
 
         Parameters
         ----------
-        X : array-like, last dimension self.dim
-            An array of points to query
+        X : array-like
+            An array of points to query.  Last dimension should match dimension
+            of training data.
         r : distance within which neighbors are returned
             r can be a single value, or an array of values of shape
             x.shape[:-1] if different radii are desired for each point.
@@ -1001,7 +985,7 @@ cdef class BallTree:
                 if sort_results:
                     _simultaneous_sort(&dist_arr_i[0], &idx_arr_i[0],
                                        count_arr[i])
-
+ 
                 indices[i] = np.array(idx_arr_i[:count_arr[i]],
                                       copy=True)
                 if return_distance:
@@ -1018,10 +1002,38 @@ cdef class BallTree:
             return indices.reshape(X.shape[:-1])
 
     def kernel_density(BallTree self, X, h, kernel='gaussian',
-                       atol=0, rtol=0, dualtree=False, normalize=True):
+                       atol=0, dualtree=False):
+        """
+        kernel_density(self, X, h, kernel='gaussian', atol=0, rtol=0,
+                       dualtree=False)
+
+        Compute the kernel density estimate of X with the given kernel.
+
+        Parameters
+        ----------
+        X : array_like
+            An array of points to query.  Last dimension should match dimension
+            of training data.
+        h : float
+            the bandwidth of the kernel
+        kernel : string
+            specify the kernel to use.  Options are
+            - 'gaussian'
+            - 'tophat'
+            - 'epanechnikov'
+            - 'exponential'
+            - 'linear'
+            - 'cosine'
+            Default is kernel = 'gaussian'
+        atol : float
+            specify the desired absolute tolerance of the result.
+            Default is 0.
+        dualtree : boolean
+            if True, use the dual tree formalism.  This can be faster for
+            large N.  Default is False
+        """
         cdef DTYPE_t h_c = h
         cdef DTYPE_t atol_c = atol
-        cdef DTYPE_t rtol_c = rtol
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef KernelType kernel_c
 
@@ -1055,8 +1067,6 @@ cdef class BallTree:
 
         # scale error to an error per point
         atol_c /= self.data.shape[0]
-        if normalize:
-            atol_c /= normalize_kernel(1, h, kernel_c)
 
         if dualtree:
             other = self.__class__(Xarr, metric=self.dm,
@@ -1068,10 +1078,6 @@ cdef class BallTree:
                 density[i] = self._kernel_density_one(0, pt, kernel_c,
                                                       h_c, atol_c, 0)
                 pt += n_features
-
-        if normalize:
-            for i in range(density.shape[0]):
-                density[i] = normalize_kernel(density[i], h, kernel_c)
 
         return np.asarray(density).reshape(X.shape[:-1])
 
@@ -1511,7 +1517,7 @@ cdef class BallTree:
         #------------------------------------------------------------
         # Case 2: points are all close enough that the contribution
         #         is maximal.  Add all points
-        elif dens_LB >= 1.0 - atol:
+        elif dens_LB >= compute_kernel(0, h, kernel) - atol:
             dens += dens_LB * (node_info.idx_end - node_info.idx_start)
 
         #------------------------------------------------------------
@@ -1570,7 +1576,7 @@ cdef class BallTree:
         #------------------------------------------------------------
         # Case 2: points are all close enough that the contribution
         #         is maximal to within the desired tolerance
-        elif dens_LB >= 1.0 - atol:
+        elif dens_LB >= compute_kernel(0, h, kernel) - atol:
             dens_LB *= (node_info1.idx_end - node_info1.idx_start)
             for i2 in range(node_info2.idx_start, node_info2.idx_end):
                 density[idx_array2[i2]] += dens_LB

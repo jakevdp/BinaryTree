@@ -152,6 +152,7 @@ def bench_KDE(N=1000, D=3, h=0.5):
         t0 = time()
         dens_true = np.exp(-0.5 * ((X[:, None, :]
                                     - X) ** 2).sum(-1) / h ** 2).sum(-1)
+        dens_true /= h * np.sqrt(2 * np.pi)
 
         bt.reset_n_calls()
         t1 = time()
