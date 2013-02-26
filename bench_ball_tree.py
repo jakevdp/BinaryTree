@@ -163,6 +163,7 @@ def bench_KDE(N=1000, D=3, h=0.5, leaf_size=30):
         t3 = time()
         n1 = bt.get_n_calls()
 
+        bt.reset_n_calls()
         t4 = time()
         dens2 = bt.kernel_density(X, h, atol=atol, rtol=rtol, kernel=kernel,
                                   dualtree=False, breadth_first=False)
@@ -171,23 +172,35 @@ def bench_KDE(N=1000, D=3, h=0.5, leaf_size=30):
 
         bt.reset_n_calls()
         t6 = time()
-        dens3 = bt.kernel_density(X, h, atol=atol,
-                                  dualtree=True, kernel=kernel)
+        dens3 = bt.kernel_density(X, h, atol=atol, kernel=kernel,
+                                  dualtree=True, breadth_first=True)
         t7 = time()
-        n2 = bt.get_n_calls()
+        n3 = bt.get_n_calls()
+
+        bt.reset_n_calls()
+        t8 = time()
+        dens4 = bt.kernel_density(X, h, atol=atol, kernel=kernel,
+                                  dualtree=True, breadth_first=False)
+        t9 = time()
+        n4 = bt.get_n_calls()
 
         print " h = %.3f" % h
         print "   brute force: %.2g sec (%i calls)" % (t1 - t0, N * N)
         print("   single tree (depth first): %.2g sec (%i calls)"
               % (t3 - t2, n1))
         print("   single tree (breadth first): %.2g sec (%i calls)"
-              % (t5 - t4, n1))
-        print "   dual tree: %.2g sec (%i calls)" % (t6 - t5, n2)
+              % (t5 - t4, n2))
+        print("   dual tree: (depth first) %.2g sec (%i calls)"
+              % (t7 - t6, n3))
+        print("   dual tree: (breadth first) %.2g sec (%i calls)"
+              % (t9 - t8, n4))
         print "   distances match:", (np.allclose(dens_true, dens1,
                                                   atol=atol, rtol=rtol),
                                       np.allclose(dens_true, dens2,
                                                   atol=atol, rtol=rtol),
                                       np.allclose(dens_true, dens3,
+                                                  atol=atol),
+                                      np.allclose(dens_true, dens4,
                                                   atol=atol))
               
 

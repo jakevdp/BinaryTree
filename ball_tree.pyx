@@ -1056,6 +1056,10 @@ cdef class BallTree:
         dualtree : boolean
             if True, use the dual tree formalism.  This can be faster for
             large N.  Default is False
+        breadth_first : boolean
+            if True, use a breadth-first search.  If False (default) use a
+            depth-first search.  Breadth-first is generally faster for
+            compact kernels and/or high tolerances.
         """
         cdef DTYPE_t h_c = h
         cdef DTYPE_t atol_c = atol
@@ -1098,42 +1102,48 @@ cdef class BallTree:
 
         cdef DTYPE_t* pt = &Xarr[0, 0]
 
-        # scale error to an error per point
-        atol_c /= self.data.shape[0]
         cdef NodeHeap nodeheap
+        if breadth_first:
+            nodeheap = NodeHeap(self.data.shape[0] // self.leaf_size)
         cdef DTYPE_t[::1] node_min_bounds
         cdef DTYPE_t[::1] node_max_bounds
 
         if dualtree:
+            # dualtree algorithms assume atol is the tolerance per point
             other = self.__class__(Xarr, metric=self.dm,
                                    leaf_size=self.leaf_size)
-            self._kde_dual_depthfirst(0, other, 0, kernel_c,
-                                      h_c, atol_c, &density[0])
-        elif breadth_first:
-            for i in range(Xarr.shape[0]):
-                # compute max & min bounds on density within top node
-                min_bound = n_samples * compute_kernel(self.max_dist(0, pt),
-                                                       h_c, kernel_c)
-                max_bound = n_samples * compute_kernel(self.min_dist(0, pt),
-                                                       h_c, kernel_c)
-                self._kde_one_depthfirst(0, pt, kernel_c, h_c,
-                                         atol_c, rtol_c,
-                                         min_bound, max_bound,
-                                         &min_bound, &max_bound)
-                density[i] = 0.5 * (min_bound + max_bound)
-                pt += n_features
-            pass
+            if breadth_first:
+                self._kde_dual_breadthfirst(other, kernel_c, h_c,
+                                            atol_c / self.data.shape[0],
+                                            &density[0], nodeheap)
+            else:
+                self._kde_dual_depthfirst(0, other, 0, kernel_c,
+                                          h_c, atol_c / self.data.shape[0],
+                                          &density[0])
         else:
-            nodeheap = NodeHeap(self.data.shape[0] // self.leaf_size)
-            node_min_bounds = np.zeros(self.n_nodes)
-            node_max_bounds = np.zeros(self.n_nodes)
-            for i in range(Xarr.shape[0]):
-                density[i] = self._kde_one_breadthfirst(pt, kernel_c,
-                                                        h_c, atol_c,
-                                                        rtol_c, nodeheap,
-                                                        &node_min_bounds[0],
-                                                        &node_max_bounds[0])
-                pt += n_features
+            if breadth_first:
+                node_min_bounds = np.zeros(self.n_nodes)
+                node_max_bounds = np.zeros(self.n_nodes)
+                for i in range(Xarr.shape[0]):
+                    density[i] = self._kde_one_breadthfirst(pt, kernel_c,
+                                                            h_c, atol_c,
+                                                            rtol_c, nodeheap,
+                                                            &node_min_bounds[0],
+                                                            &node_max_bounds[0])
+                    pt += n_features
+            else:
+                for i in range(Xarr.shape[0]):
+                    # compute max & min bounds on density within top node
+                    min_bound = n_samples * compute_kernel(self.max_dist(0, pt),
+                                                           h_c, kernel_c)
+                    max_bound = n_samples * compute_kernel(self.min_dist(0, pt),
+                                                           h_c, kernel_c)
+                    self._kde_one_depthfirst(0, pt, kernel_c, h_c,
+                                             atol_c, rtol_c,
+                                             min_bound, max_bound,
+                                             &min_bound, &max_bound)
+                    density[i] = 0.5 * (min_bound + max_bound)
+                    pt += n_features
 
         # normalize the results
         cdef DTYPE_t knorm = kernel_norm(h_c, kernel_c)
@@ -1651,13 +1661,13 @@ cdef class BallTree:
         return 0.5 * (global_max_bound + global_min_bound)
 
 
-    cdef DTYPE_t _kde_one_depthfirst(self, ITYPE_t i_node, DTYPE_t* pt,
-                                     KernelType kernel, DTYPE_t h,
-                                     DTYPE_t atol, DTYPE_t rtol,
-                                     DTYPE_t local_min_bound,
-                                     DTYPE_t local_max_bound,
-                                     DTYPE_t* global_min_bound,
-                                     DTYPE_t* global_max_bound):
+    cdef void _kde_one_depthfirst(self, ITYPE_t i_node, DTYPE_t* pt,
+                                  KernelType kernel, DTYPE_t h,
+                                  DTYPE_t atol, DTYPE_t rtol,
+                                  DTYPE_t local_min_bound,
+                                  DTYPE_t local_max_bound,
+                                  DTYPE_t* global_min_bound,
+                                  DTYPE_t* global_max_bound):
         cdef ITYPE_t i, i1, i2, N1, N2
 
         cdef DTYPE_t* data = &self.data[0, 0]
@@ -1734,14 +1744,111 @@ cdef class BallTree:
                                      global_min_bound, global_max_bound)
 
 
+    cdef void _kde_dual_breadthfirst(BallTree self, BallTree other,
+                                     KernelType kernel,
+                                     DTYPE_t h, DTYPE_t atol,
+                                     DTYPE_t* density, NodeHeap nodeheap):
+        # note that atol here is absolute tolerance *per point*
+        cdef ITYPE_t i1, i2, i_node1, i_node2
+
+        cdef DTYPE_t* data1 = &self.data[0, 0]
+        cdef DTYPE_t* data2 = &other.data[0, 0]
+
+        cdef ITYPE_t* idx_array1 = &self.idx_array[0]
+        cdef ITYPE_t* idx_array2 = &other.idx_array[0]
+
+        cdef ITYPE_t n_features = self.data.shape[1]
+
+        cdef NodeData_t node_info1, node_info2
+
+        cdef NodeData_t* node_data1 = &self.node_data[0]
+        cdef NodeData_t* node_data2 = &other.node_data[0]
+
+        cdef NodeHeapData_t nodeheap_item
+
+        cdef DTYPE_t dist_LB, dist_UB, dens_LB, dens_UB
+        
+        nodeheap_item.val = self.min_dist_dual(0, other, 0)
+        nodeheap_item.i1 = 0
+        nodeheap_item.i2 = 0
+        nodeheap.push(nodeheap_item)
+
+        cdef DTYPE_t knorm = kernel_norm(h, kernel)
+
+        while nodeheap.n > 0:
+            nodeheap_item = nodeheap.pop()
+            dist_LB = nodeheap_item.val
+            i_node1 = nodeheap_item.i1
+            i_node2 = nodeheap_item.i2
+            node_info1 = node_data1[i_node1]
+            node_info2 = node_data1[i_node2]
+
+            dist_UB = self.max_dist_dual(i_node1, other, i_node2)
+            dens_LB = compute_kernel(dist_UB, h, kernel)
+            dens_UB = compute_kernel(dist_LB, h, kernel)
+
+            #------------------------------------------------------------
+            # Case 1: points are all far enough that contribution is zero
+            #         to within the desired tolerance
+            if knorm * dens_UB <= atol:
+                dens_UB *= (node_info1.idx_end - node_info1.idx_start)
+                for i2 in range(node_info2.idx_start, node_info2.idx_end):
+                    density[idx_array2[i2]] += dens_UB
+        
+            #------------------------------------------------------------
+            # Case 2: points are all close enough that the contribution
+            #         is maximal to within the desired tolerance
+            elif knorm * dens_LB >= knorm - atol:
+                dens_LB *= (node_info1.idx_end - node_info1.idx_start)
+                for i2 in range(node_info2.idx_start, node_info2.idx_end):
+                    density[idx_array2[i2]] += dens_LB
+
+            #------------------------------------------------------------
+            # Case 3: both nodes are leaves: go through all pairs
+            elif node_info1.is_leaf and node_info2.is_leaf:
+                for i2 in range(node_info2.idx_start, node_info2.idx_end):
+                    for i1 in range(node_info1.idx_start, node_info1.idx_end):
+                        dist_pt = self.dist(data1 + n_features * idx_array1[i1],
+                                            data2 + n_features * idx_array2[i2],
+                                            n_features)
+                        density[idx_array2[i2]] += compute_kernel(dist_pt, h,
+                                                                  kernel)
+
+            #------------------------------------------------------------
+            # Case 4a: only one node is a leaf: split the other
+            elif node_info1.is_leaf:
+                for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
+                    nodeheap_item.val = self.min_dist_dual(i_node1, other, i2)
+                    nodeheap_item.i1 = i_node1
+                    nodeheap_item.i2 = i2
+                    nodeheap.push(nodeheap_item)
+
+            elif node_info2.is_leaf:
+                for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
+                    nodeheap_item.val = self.min_dist_dual(i1, other, i_node2)
+                    nodeheap_item.i1 = i1
+                    nodeheap_item.i2 = i_node2
+                    nodeheap.push(nodeheap_item)
+
+            #------------------------------------------------------------
+            # Case 4b: both nodes need to be split
+            else:
+                for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
+                    for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
+                        nodeheap_item.val = self.min_dist_dual(i1, other, i2)
+                        nodeheap_item.i1 = i1
+                        nodeheap_item.i2 = i2
+                        nodeheap.push(nodeheap_item)
+
+
     cdef void _kde_dual_depthfirst(BallTree self, ITYPE_t i_node1,
                                    BallTree other, ITYPE_t i_node2,
                                    KernelType kernel,
                                    DTYPE_t h, DTYPE_t atol,
                                    DTYPE_t* density):
+        # note that atol here is absolute tolerance *per point*
         cdef ITYPE_t i1, i2
 
-        # note that atol here is absolute tolerance *per point*
         cdef DTYPE_t* data1 = &self.data[0, 0]
         cdef DTYPE_t* data2 = &other.data[0, 0]
 
