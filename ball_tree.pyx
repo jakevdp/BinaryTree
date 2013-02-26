@@ -1093,6 +1093,9 @@ cdef class BallTree:
 
         # scale error to an error per point
         atol_c /= self.data.shape[0]
+        cdef NodeHeap nodeheap
+        cdef DTYPE_t[::1] node_min_bounds
+        cdef DTYPE_t[::1] node_max_bounds
 
         if dualtree:
             other = self.__class__(Xarr, metric=self.dm,
@@ -1100,17 +1103,14 @@ cdef class BallTree:
             self._kernel_density_dual(0, other, 0, kernel_c,
                                       h_c, atol_c, &density[0])
         else:
+            nodeheap = NodeHeap(self.data.shape[0] // self.leaf_size)
+            node_min_bounds = np.zeros(self.n_nodes)
+            node_max_bounds = np.zeros(self.n_nodes)
             for i in range(Xarr.shape[0]):
-                # compute max & min bounds on density within top node
-                min_bound = n_samples * compute_kernel(self.max_dist(0, pt),
-                                                       h_c, kernel_c)
-                max_bound = n_samples * compute_kernel(self.min_dist(0, pt),
-                                                       h_c, kernel_c)
-                self._kernel_density_one(0, pt, kernel_c, h_c,
-                                         atol_c, rtol_c,
-                                         min_bound, max_bound,
-                                         &min_bound, &max_bound)
-                density[i] = 0.5 * (min_bound + max_bound)
+                density[i] = self._kernel_density_one(pt, kernel_c, h_c,
+                                                      atol_c, rtol_c, nodeheap,
+                                                      &node_min_bounds[0],
+                                                      &node_max_bounds[0])
                 pt += n_features
 
         # normalize the results
@@ -1527,87 +1527,105 @@ cdef class BallTree:
 
         return count
 
-    cdef DTYPE_t _kernel_density_one(self, ITYPE_t i_node, DTYPE_t* pt,
+    cdef DTYPE_t _kernel_density_one(self, DTYPE_t* pt,
                                      KernelType kernel, DTYPE_t h,
                                      DTYPE_t atol, DTYPE_t rtol,
-                                     DTYPE_t local_min_bound,
-                                     DTYPE_t local_max_bound,
-                                     DTYPE_t* global_min_bound,
-                                     DTYPE_t* global_max_bound):
-        cdef ITYPE_t i, i1, i2, N1, N2
+                                     NodeHeap nodeheap,
+                                     DTYPE_t* node_min_bounds,
+                                     DTYPE_t* node_max_bounds):
+        cdef ITYPE_t i, i1, i2, N1, N2, i_node
+        cdef DTYPE_t global_min_bound, global_max_bound
 
         cdef DTYPE_t* data = &self.data[0, 0]
         cdef ITYPE_t* idx_array = &self.idx_array[0]
+        cdef ITYPE_t N = self.data.shape[0]
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef DTYPE_t knorm = kernel_norm(h, kernel)
 
-        cdef NodeData_t node_info = self.node_data[i_node]
-        cdef DTYPE_t dist_pt, dens_contribution
+        cdef NodeData_t node_info
+        cdef DTYPE_t dist_pt, dens_contribution, dist_LB_1, dist_LB_2
 
-        cdef DTYPE_t child1_min_bound, child2_min_bound, dist_UB
-        cdef DTYPE_t child1_max_bound, child2_max_bound, dist_LB
+        cdef DTYPE_t dist_UB, dist_LB
 
-        #print (node_info.idx_start, node_info.idx_end)
-        #print (global_min_bound[0], global_max_bound[0],
-        #       local_min_bound, local_max_bound)
+        # push the top node to the heap
+        cdef NodeHeapData_t nodeheap_item
+        nodeheap_item.val = self.min_dist(0, pt)
+        nodeheap_item.i1 = 0
+        nodeheap.push(nodeheap_item)
 
-        #------------------------------------------------------------
-        # Case 1: local bounds are equal.  Return
-        #   (note: we use inequality for roundoff errors)
-        if local_min_bound >= local_max_bound:
-            pass
+        global_min_bound = N * compute_kernel(self.max_dist(0, pt),
+                                              h, kernel)
+        global_max_bound = N * compute_kernel(nodeheap_item.val,
+                                              h, kernel)
 
-        #------------------------------------------------------------
-        # Case 2: global bounds are within rtol & atol. Return
-        elif (knorm * (global_max_bound[0] - global_min_bound[0])
-            <= (atol + rtol * knorm * global_min_bound[0])):
-            pass
+        node_min_bounds[0] = global_min_bound
+        node_max_bounds[0] = global_max_bound
 
-        #------------------------------------------------------------
-        # Case 3: node is a leaf. Count contributions from all points
-        elif node_info.is_leaf:
-            global_min_bound[0] -= local_min_bound
-            global_max_bound[0] -= local_max_bound
-            for i in range(node_info.idx_start, node_info.idx_end):
-                dist_pt = self.dist(pt, (data + n_features * idx_array[i]),
-                                    n_features)
-                dens_contribution = compute_kernel(dist_pt, h, kernel)
-                global_min_bound[0] += dens_contribution
-                global_max_bound[0] += dens_contribution
+        while nodeheap.n > 0:
+            nodeheap_item = nodeheap.pop()
+            i_node = nodeheap_item.i1
+            node_info = self.node_data[i_node]
+            N1 = node_info.idx_end - node_info.idx_start
 
-        #------------------------------------------------------------
-        # Case 4: split node and query subnodes
-        else:
-            i1 = 2 * i_node + 1
-            i2 = 2 * i_node + 2
+            #------------------------------------------------------------
+            # Case 1: local bounds are equal to within per-point tolerance.
+            if ((knorm * node_min_bounds[i_node]) >=
+                (knorm * node_max_bounds[i_node]
+                 - (atol + rtol * knorm * node_min_bounds[i_node]) * N1 / N)):
+                pass
 
-            N1 = self.node_data[i1].idx_end - self.node_data[i1].idx_start
-            N2 = self.node_data[i2].idx_end - self.node_data[i2].idx_start
+            #------------------------------------------------------------
+            # Case 2: global bounds are within rtol & atol.
+            elif (knorm * (global_max_bound - global_min_bound)
+                  <= (atol + rtol * knorm * global_min_bound)):
+                break
+
+            #------------------------------------------------------------
+            # Case 3: node is a leaf. Count contributions from all points
+            elif node_info.is_leaf:
+                global_min_bound -= node_min_bounds[i_node]
+                global_max_bound -= node_max_bounds[i_node]
+                for i in range(node_info.idx_start, node_info.idx_end):
+                    dist_pt = self.dist(pt, data + n_features * idx_array[i],
+                                        n_features)
+                    dens_contribution = compute_kernel(dist_pt, h, kernel)
+                    global_min_bound += dens_contribution
+                    global_max_bound += dens_contribution
+
+            #------------------------------------------------------------
+            # Case 4: split node and query subnodes
+            else:
+                i1 = 2 * i_node + 1
+                i2 = 2 * i_node + 2
+
+                N1 = self.node_data[i1].idx_end - self.node_data[i1].idx_start
+                N2 = self.node_data[i2].idx_end - self.node_data[i2].idx_start
+
+                dist_LB_1 = self.min_dist(i1, pt)
+                dist_LB_2 = self.min_dist(i2, pt)
+
+                node_max_bounds[i1] = N1 * compute_kernel(dist_LB_1, h, kernel)
+                node_min_bounds[i1] = N1 * compute_kernel(
+                                              self.max_dist(i1, pt), h, kernel)
+
+                node_max_bounds[i2] = N2 * compute_kernel(dist_LB_2, h, kernel)
+                node_min_bounds[i2] = N2 * compute_kernel(
+                                              self.max_dist(i2, pt), h, kernel)
             
-            # XXX: for efficiency, compute min & max bounds at the same time
-            child1_min_bound = N1 * compute_kernel(self.max_dist(i1, pt),
-                                                   h, kernel)
-            child1_max_bound = N1 * compute_kernel(self.min_dist(i1, pt),
-                                                   h, kernel)
-            child2_min_bound = N2 * compute_kernel(self.max_dist(i2, pt),
-                                                   h, kernel)
-            child2_max_bound = N2 * compute_kernel(self.min_dist(i2, pt),
-                                                   h, kernel)
-            
-            global_min_bound[0] += (child1_min_bound + child2_min_bound
-                                    - local_min_bound)
-            global_max_bound[0] += (child1_max_bound + child2_max_bound
-                                    - local_max_bound)
+                global_min_bound += (node_min_bounds[i1] + node_min_bounds[i2]
+                                     - node_min_bounds[i_node])
+                global_max_bound += (node_max_bounds[i1] + node_max_bounds[i2]
+                                     - node_max_bounds[i_node])
 
-            self._kernel_density_one(i1, pt, kernel, h,
-                                     atol, rtol,
-                                     child1_min_bound, child1_max_bound,
-                                     global_min_bound, global_max_bound)
-            self._kernel_density_one(i2, pt, kernel, h,
-                                     atol, rtol,
-                                     child2_min_bound, child2_max_bound,
-                                     global_min_bound, global_max_bound)
+                nodeheap_item.val = dist_LB_1
+                nodeheap_item.i1 = i1
+                nodeheap.push(nodeheap_item)
 
+                nodeheap_item.val = dist_LB_2
+                nodeheap_item.i1 = i2
+                nodeheap.push(nodeheap_item)
+            #
+        return 0.5 * (global_max_bound + global_min_bound)
 
     cdef void _kernel_density_dual(BallTree self, ITYPE_t i_node1,
                                    BallTree other, ITYPE_t i_node2,
