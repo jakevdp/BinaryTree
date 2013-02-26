@@ -1022,7 +1022,7 @@ cdef class BallTree:
             return indices.reshape(X.shape[:-1])
 
     def kernel_density(BallTree self, X, h, kernel='gaussian',
-                       atol=0, rtol=0, dualtree=False):
+                       atol=0, rtol=0, dualtree=False, breadth_first=False):
         """
         kernel_density(self, X, h, kernel='gaussian', atol=0, rtol=0,
                        dualtree=False)
@@ -1107,17 +1107,32 @@ cdef class BallTree:
         if dualtree:
             other = self.__class__(Xarr, metric=self.dm,
                                    leaf_size=self.leaf_size)
-            self._kernel_density_dual(0, other, 0, kernel_c,
+            self._kde_dual_depthfirst(0, other, 0, kernel_c,
                                       h_c, atol_c, &density[0])
+        elif breadth_first:
+            for i in range(Xarr.shape[0]):
+                # compute max & min bounds on density within top node
+                min_bound = n_samples * compute_kernel(self.max_dist(0, pt),
+                                                       h_c, kernel_c)
+                max_bound = n_samples * compute_kernel(self.min_dist(0, pt),
+                                                       h_c, kernel_c)
+                self._kde_one_depthfirst(0, pt, kernel_c, h_c,
+                                         atol_c, rtol_c,
+                                         min_bound, max_bound,
+                                         &min_bound, &max_bound)
+                density[i] = 0.5 * (min_bound + max_bound)
+                pt += n_features
+            pass
         else:
             nodeheap = NodeHeap(self.data.shape[0] // self.leaf_size)
             node_min_bounds = np.zeros(self.n_nodes)
             node_max_bounds = np.zeros(self.n_nodes)
             for i in range(Xarr.shape[0]):
-                density[i] = self._kernel_density_one(pt, kernel_c, h_c,
-                                                      atol_c, rtol_c, nodeheap,
-                                                      &node_min_bounds[0],
-                                                      &node_max_bounds[0])
+                density[i] = self._kde_one_breadthfirst(pt, kernel_c,
+                                                        h_c, atol_c,
+                                                        rtol_c, nodeheap,
+                                                        &node_min_bounds[0],
+                                                        &node_max_bounds[0])
                 pt += n_features
 
         # normalize the results
@@ -1534,12 +1549,12 @@ cdef class BallTree:
 
         return count
 
-    cdef DTYPE_t _kernel_density_one(self, DTYPE_t* pt,
-                                     KernelType kernel, DTYPE_t h,
-                                     DTYPE_t atol, DTYPE_t rtol,
-                                     NodeHeap nodeheap,
-                                     DTYPE_t* node_min_bounds,
-                                     DTYPE_t* node_max_bounds):
+    cdef DTYPE_t _kde_one_breadthfirst(self, DTYPE_t* pt,
+                                       KernelType kernel, DTYPE_t h,
+                                       DTYPE_t atol, DTYPE_t rtol,
+                                       NodeHeap nodeheap,
+                                       DTYPE_t* node_min_bounds,
+                                       DTYPE_t* node_max_bounds):
         cdef ITYPE_t i, i1, i2, N1, N2, i_node
         cdef DTYPE_t global_min_bound, global_max_bound
 
@@ -1635,7 +1650,91 @@ cdef class BallTree:
         nodeheap.clear()
         return 0.5 * (global_max_bound + global_min_bound)
 
-    cdef void _kernel_density_dual(BallTree self, ITYPE_t i_node1,
+
+    cdef DTYPE_t _kde_one_depthfirst(self, ITYPE_t i_node, DTYPE_t* pt,
+                                     KernelType kernel, DTYPE_t h,
+                                     DTYPE_t atol, DTYPE_t rtol,
+                                     DTYPE_t local_min_bound,
+                                     DTYPE_t local_max_bound,
+                                     DTYPE_t* global_min_bound,
+                                     DTYPE_t* global_max_bound):
+        cdef ITYPE_t i, i1, i2, N1, N2
+
+        cdef DTYPE_t* data = &self.data[0, 0]
+        cdef ITYPE_t* idx_array = &self.idx_array[0]
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef DTYPE_t knorm = kernel_norm(h, kernel)
+
+        cdef NodeData_t node_info = self.node_data[i_node]
+        cdef DTYPE_t dist_pt, dens_contribution
+
+        cdef DTYPE_t child1_min_bound, child2_min_bound, dist_UB
+        cdef DTYPE_t child1_max_bound, child2_max_bound, dist_LB
+
+        N1 = node_info.idx_end - node_info.idx_start
+        N2 = self.data.shape[0]
+
+        #------------------------------------------------------------
+        # Case 1: local bounds are equal.  Return
+        #   (note: we use inequality for roundoff errors)
+        if ((knorm * local_min_bound) >=
+            (knorm * local_max_bound
+             - (atol + rtol * knorm * local_min_bound) * N1 / N2)):
+            pass
+
+        #------------------------------------------------------------
+        # Case 2: global bounds are within rtol & atol. Return
+        elif (knorm * (global_max_bound[0] - global_min_bound[0])
+            <= (atol + rtol * knorm * global_min_bound[0])):
+            pass
+
+        #------------------------------------------------------------
+        # Case 3: node is a leaf. Count contributions from all points
+        elif node_info.is_leaf:
+            global_min_bound[0] -= local_min_bound
+            global_max_bound[0] -= local_max_bound
+            for i in range(node_info.idx_start, node_info.idx_end):
+                dist_pt = self.dist(pt, (data + n_features * idx_array[i]),
+                                    n_features)
+                dens_contribution = compute_kernel(dist_pt, h, kernel)
+                global_min_bound[0] += dens_contribution
+                global_max_bound[0] += dens_contribution
+
+        #------------------------------------------------------------
+        # Case 4: split node and query subnodes
+        else:
+            i1 = 2 * i_node + 1
+            i2 = 2 * i_node + 2
+
+            N1 = self.node_data[i1].idx_end - self.node_data[i1].idx_start
+            N2 = self.node_data[i2].idx_end - self.node_data[i2].idx_start
+            
+            # XXX: for efficiency, compute min & max bounds at the same time
+            child1_min_bound = N1 * compute_kernel(self.max_dist(i1, pt),
+                                                   h, kernel)
+            child1_max_bound = N1 * compute_kernel(self.min_dist(i1, pt),
+                                                   h, kernel)
+            child2_min_bound = N2 * compute_kernel(self.max_dist(i2, pt),
+                                                   h, kernel)
+            child2_max_bound = N2 * compute_kernel(self.min_dist(i2, pt),
+                                                   h, kernel)
+            
+            global_min_bound[0] += (child1_min_bound + child2_min_bound
+                                    - local_min_bound)
+            global_max_bound[0] += (child1_max_bound + child2_max_bound
+                                    - local_max_bound)
+
+            self._kde_one_depthfirst(i1, pt, kernel, h,
+                                     atol, rtol,
+                                     child1_min_bound, child1_max_bound,
+                                     global_min_bound, global_max_bound)
+            self._kde_one_depthfirst(i2, pt, kernel, h,
+                                     atol, rtol,
+                                     child2_min_bound, child2_max_bound,
+                                     global_min_bound, global_max_bound)
+
+
+    cdef void _kde_dual_depthfirst(BallTree self, ITYPE_t i_node1,
                                    BallTree other, ITYPE_t i_node2,
                                    KernelType kernel,
                                    DTYPE_t h, DTYPE_t atol,
@@ -1694,12 +1793,12 @@ cdef class BallTree:
         # Case 4a: only one node is a leaf: split the other
         elif node_info1.is_leaf:
             for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
-                self._kernel_density_dual(i_node1, other, i2, kernel,
+                self._kde_dual_depthfirst(i_node1, other, i2, kernel,
                                           h, atol, density)
 
         elif node_info2.is_leaf:
             for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
-                self._kernel_density_dual(i1, other, i_node2, kernel,
+                self._kde_dual_depthfirst(i1, other, i_node2, kernel,
                                           h, atol, density)
 
         #------------------------------------------------------------
@@ -1707,7 +1806,7 @@ cdef class BallTree:
         else:
             for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
                 for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
-                    self._kernel_density_dual(i1, other, i2, kernel,
+                    self._kde_dual_depthfirst(i1, other, i2, kernel,
                                               h, atol, density)
 
     #----------------------------------------------------------------------

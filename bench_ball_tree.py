@@ -146,34 +146,49 @@ def bench_KDE(N=1000, D=3, h=0.5, leaf_size=30):
     kernel = 'gaussian'
 
     print "Kernel Density:"
-    atol = 1E-10
+    atol = 1E-5
+    rtol = 1E-5
 
     for h in [0.001, 0.01, 0.1]:
         t0 = time()
         dens_true = np.exp(-0.5 * ((X[:, None, :]
                                     - X) ** 2).sum(-1) / h ** 2).sum(-1)
         dens_true /= h * np.sqrt(2 * np.pi)
+        t1 = time()
 
         bt.reset_n_calls()
-        t1 = time()
-        dens1 = bt.kernel_density(X, h, atol=atol,
-                                  dualtree=False, kernel=kernel)
         t2 = time()
+        dens1 = bt.kernel_density(X, h, atol=atol, rtol=rtol, kernel=kernel,
+                                  dualtree=False, breadth_first=True)
+        t3 = time()
         n1 = bt.get_n_calls()
 
-        bt.reset_n_calls()
-        t3 = time()
-        dens2 = bt.kernel_density(X, h, atol=atol,
-                                  dualtree=True, kernel=kernel)
         t4 = time()
+        dens2 = bt.kernel_density(X, h, atol=atol, rtol=rtol, kernel=kernel,
+                                  dualtree=False, breadth_first=False)
+        t5 = time()
+        n2 = bt.get_n_calls()
+
+        bt.reset_n_calls()
+        t6 = time()
+        dens3 = bt.kernel_density(X, h, atol=atol,
+                                  dualtree=True, kernel=kernel)
+        t7 = time()
         n2 = bt.get_n_calls()
 
         print " h = %.3f" % h
         print "   brute force: %.2g sec (%i calls)" % (t1 - t0, N * N)
-        print "   single tree: %.2g sec (%i calls)" % (t2 - t1, n1)
-        print "   dual tree: %.2g sec (%i calls)" % (t4 - t3, n2)
-        print "   distances match:", (np.allclose(dens_true, dens1, atol=atol),
-                                      np.allclose(dens_true, dens2, atol=atol))
+        print("   single tree (depth first): %.2g sec (%i calls)"
+              % (t3 - t2, n1))
+        print("   single tree (breadth first): %.2g sec (%i calls)"
+              % (t5 - t4, n1))
+        print "   dual tree: %.2g sec (%i calls)" % (t6 - t5, n2)
+        print "   distances match:", (np.allclose(dens_true, dens1,
+                                                  atol=atol, rtol=rtol),
+                                      np.allclose(dens_true, dens2,
+                                                  atol=atol, rtol=rtol),
+                                      np.allclose(dens_true, dens3,
+                                                  atol=atol))
               
 
 if __name__ == '__main__':
