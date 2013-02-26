@@ -111,6 +111,8 @@ def test_ball_tree_KDE(n_samples=100, n_features=3):
             for rtol in [0, 1E-5]:
                 for atol in [1E-10, 1E-5, 0.1]:
                     for dualtree in (True, False):
+                        if dualtree and rtol > 0:
+                            continue
                         yield check_results, kernel, h, atol, rtol, dualtree
 
 

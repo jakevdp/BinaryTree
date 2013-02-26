@@ -549,10 +549,8 @@ cdef class NodeHeap:
             for i in range(min(size, new_size)):
                 new_data_arr[i] = data_arr[i]
             
-        if new_size > size:
-            new_data_arr = &new_data[0]
-            for i in range(size, new_size):
-                new_data[i].val = -INF
+        if new_size < size:
+            self.n = new_size
 
         self.data = new_data
 
@@ -591,7 +589,6 @@ cdef class NodeHeap:
         # pop off the first element, move the last element to the front,
         # and then perform swaps until the heap is back in order
         data_arr[0] = data_arr[self.n - 1]
-        data_arr[self.n - 1].val = INF
         self.n -= 1
 
         i = 0
@@ -621,9 +618,6 @@ cdef class NodeHeap:
 
     cdef clear(self):
         """Clear the stack"""
-        cdef NodeHeapData_t* data_arr = &self.data[0]
-        for i in range(self.n):
-            data_arr[i].val = INF
         self.n = 0
 
 
@@ -1052,9 +1046,13 @@ cdef class BallTree:
             - 'linear'
             - 'cosine'
             Default is kernel = 'gaussian'
-        atol : float
-            specify the desired absolute tolerance of the result.
-            Default is 0.
+        atol, rtol : float
+            Specify the desired relative and absolute tolerance of the result.
+            If the true result is K_true, then the returned result K_ret
+            satisfies
+                abs(K_true - K_ret) < atol + rtol * K_ret
+            Default is zero (i.e. machine precision) for both.
+            Note that for dualtree=True, rtol must be zero.
         dualtree : boolean
             if True, use the dual tree formalism.  This can be faster for
             large N.  Default is False
@@ -1067,6 +1065,10 @@ cdef class BallTree:
         cdef ITYPE_t n_samples = self.data.shape[0]
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef KernelType kernel_c
+
+        # validate rtol
+        if dualtree and rtol > 0:
+            warnings.warn("rtol > 0 not compatible with dualtree")
 
         # validate kernel
         if kernel == 'gaussian':
@@ -1631,7 +1633,6 @@ cdef class BallTree:
                 nodeheap.push(nodeheap_item)
 
         nodeheap.clear()
-
         return 0.5 * (global_max_bound + global_min_bound)
 
     cdef void _kernel_density_dual(BallTree self, ITYPE_t i_node1,
