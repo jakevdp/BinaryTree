@@ -14,6 +14,10 @@ class TestMetrics:
         self.X1 = np.random.random((n1, d)).astype(dtype)
         self.X2 = np.random.random((n2, d)).astype(dtype)
 
+        # make boolean arrays: ones and zeros
+        self.X1_bool = self.X1.round(0)
+        self.X2_bool = self.X2.round(0)
+
         V = np.random.random((d, d))
         VI = np.dot(V, V.T)
 
@@ -24,7 +28,14 @@ class TestMetrics:
                         'seuclidean':dict(V=(np.random.random(d),)),
                         'wminkowski':dict(p=(1, 1.5, 3),
                                           w=(np.random.random(d),)),
-                        'mahalanobis':dict(VI=(VI,))}
+                        'mahalanobis':dict(VI=(VI,)),
+                        'hamming':{},
+                        'canberra':{},
+                        'braycurtis':{}}
+
+        self.bool_metrics = ['yule', 'matching', 'jaccard', 'dice',
+                             'kulsinski', 'rogerstanimoto', 'russellrao',
+                             'sokalmichener', 'sokalsneath']
 
     def test_cdist(self):
         for metric, argdict in self.metrics.iteritems():
@@ -33,10 +44,19 @@ class TestMetrics:
                 kwargs = dict(zip(keys, vals))
                 D_true = cdist(self.X1, self.X2, metric, **kwargs)
                 yield self.check_cdist, metric, kwargs, D_true
+
+        for metric in self.bool_metrics:
+            D_true = cdist(self.X1_bool, self.X2_bool, metric)
+            yield self.check_cdist_bool, metric, D_true
             
     def check_cdist(self, metric, kwargs, D_true):
         dm = DistanceMetric.get_metric(metric, **kwargs)
         D12 = dm.pairwise(self.X1, self.X2)
+        assert_allclose(D12, D_true)
+
+    def check_cdist_bool(self, metric, D_true):
+        dm = DistanceMetric.get_metric(metric)
+        D12 = dm.pairwise(self.X1_bool, self.X2_bool)
         assert_allclose(D12, D_true)
 
     def test_pdist(self):

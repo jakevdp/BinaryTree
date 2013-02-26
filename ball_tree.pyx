@@ -5,7 +5,7 @@
 
 cimport cython
 cimport numpy as np
-from libc.math cimport fmax, fmin, fabs, sqrt, exp, cos
+from libc.math cimport fmax, fmin, fabs, sqrt, exp, cos, pow
 
 import numpy as np
 import warnings
@@ -204,6 +204,12 @@ cdef class DistanceMetric:
             return MahalanobisDistance(**kwargs)
         elif metric == 'wminkowski':
             return WMinkowskiDistance(**kwargs)
+        elif metric == 'hamming':
+            return HammingDistance(**kwargs)
+        elif metric == 'canberra':
+            return CanberraDistance(**kwargs)
+        elif metric == 'braycurtis':
+            return BrayCurtisDistance(**kwargs)
         elif metric in ['minkowski', 'p']:
             p = kwargs.get('p', 2)
             if p == 1:
@@ -212,6 +218,26 @@ cdef class DistanceMetric:
                 return EuclideanDistance()
             else:
                 return MinkowskiDistance(p)
+        elif metric == 'yule':
+            return YuleDistance()
+        elif metric == 'matching':
+            return MatchingDistance()
+        elif metric == 'hamming':
+            return HammingDistance()
+        elif metric == 'jaccard':
+            return JaccardDistance()
+        elif metric == 'dice':
+            return DiceDistance()
+        elif metric == 'kulsinski':
+            return KulsinskiDistance()
+        elif metric == 'rogerstanimoto':
+            return RogerStanimotoDistance()
+        elif metric == 'russellrao':
+            return RussellRaoDistance()
+        elif metric == 'sokalmichener':
+            return SokalMichenerDistance()
+        elif metric == 'sokalsneath':
+            return SokalSneathDistance()
         else:
             raise ValueError('metric = "%s" not recognized' % str(metric))
 
@@ -470,6 +496,171 @@ cdef class MahalanobisDistance(DistanceMetric):
 
     def dist_to_rdist_arr(self, dist):
         return dist ** 2
+
+
+#------------------------------------------------------------
+# Hamming Distance
+#  d = N_unequal(x, y) / N_totcdef
+cdef class HammingDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef int n_unequal = 0
+        for j in range(size):
+            if x1[j] != x2[j]:
+                n_unequal += 1
+        return float(n_unequal) / size
+
+
+#------------------------------------------------------------
+# Canberra Distance
+#  D(x, y) = sum[ abs(x_i - y_i) / (abs(x_i) + abs(y_i)) ]
+cdef class CanberraDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef DTYPE_t denom, d = 0
+        for j in range(size):
+            denom = abs(x1[j]) + abs(x2[j])
+            if denom > 0:
+                d += abs(x1[j] - x2[j]) / denom
+        return d
+
+
+#------------------------------------------------------------
+# Bray-Curtis Distance
+#  D(x, y) = sum[abs(x_i - y_i)] / sum[abs(x_i) + abs(y_i)]
+cdef class BrayCurtisDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef DTYPE_t num = 0, denom = 0
+        for j in range(size):
+            num += abs(x1[j] - x2[j])
+            denom += abs(x1[j]) + abs(x2[j])
+        if denom > 0:
+            return num / denom
+        else:
+            return 0.0
+
+
+#------------------------------------------------------------
+# Yule Distance (boolean)
+#  D(x, y) = 2 * ntf * nft / (ntt * nff + ntf * nft)
+cdef class YuleDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef int tf1, tf2, ntf = 0, nft = 0, ntt = 0, nff = 0
+        for j in range(size):
+            tf1 = x1[j] != 0
+            tf2 = x2[j] != 0
+
+            ntt += tf1 and tf2
+            ntf += tf1 and (tf2 == 0)
+            nft += (tf1 == 0) and tf2
+        nff = size - ntt - ntf - nft
+        return (2.0 * ntf * nft) / (ntt * nff + ntf * nft)
+
+
+#------------------------------------------------------------
+# Jaccard Distance (boolean)
+#  D(x, y) = N_unequal(x, y) / N_nonzero(x, y)
+cdef class JaccardDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef int tf1, tf2, n_eq = 0, nnz = 0
+        for j in range(size):
+            tf1 = x1[j] != 0
+            tf2 = x2[j] != 0
+            nnz += (tf1 or tf2)
+            n_eq += (tf1 and tf2)
+        return (nnz - n_eq) * 1.0 / nnz
+
+
+#------------------------------------------------------------
+# Matching Distance (boolean)
+#  D(x, y) = n_neq / n
+cdef class MatchingDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef int tf1, tf2, n_neq = 0
+        for j in range(size):
+            tf1 = x1[j] != 0
+            tf2 = x2[j] != 0
+            n_neq += (tf1 != tf2)
+        return n_neq * 1. / size
+
+
+#------------------------------------------------------------
+# Dice Distance (boolean)
+#  D(x, y) = n_neq / (2 * ntt + n_neq)
+cdef class DiceDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef int tf1, tf2, n_neq = 0, ntt = 0
+        for j in range(size):
+            tf1 = x1[j] != 0
+            tf2 = x2[j] != 0
+            ntt += (tf1 and tf2)
+            n_neq += (tf1 != tf2)
+        return n_neq / (2.0 * ntt + n_neq)
+
+
+#------------------------------------------------------------
+# Kulsinski Distance (boolean)
+#  D(x, y) = (ntf + nft - ntt + n) / (n_neq + n)
+cdef class KulsinskiDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef int tf1, tf2, ntt = 0, n_neq = 0
+        for j in range(size):
+            tf1 = x1[j] != 0
+            tf2 = x2[j] != 0
+            n_neq += (tf1 != tf2)
+            ntt += (tf1 and tf2)
+        return (n_neq - ntt + size) * 1.0 / (n_neq + size)
+
+
+#------------------------------------------------------------
+# Roger-Stanimoto Distance (boolean)
+#  D(x, y) = 2 * n_neq / (n + n_neq)
+cdef class RogerStanimotoDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef int tf1, tf2, n_neq = 0
+        for j in range(size):
+            tf1 = x1[j] != 0
+            tf2 = x2[j] != 0
+            n_neq += (tf1 != tf2)
+        return (2.0 * n_neq) / (size + n_neq)
+
+
+#------------------------------------------------------------
+# Russell-Rao Distance (boolean)
+#  D(x, y) = (n - ntt) / n
+cdef class RussellRaoDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef int tf1, tf2, ntt = 0
+        for j in range(size):
+            tf1 = x1[j] != 0
+            tf2 = x2[j] != 0
+            ntt += (tf1 and tf2)
+        return (size - ntt) * 1. / size
+
+
+#------------------------------------------------------------
+# Sokal-Michener Distance (boolean)
+#  D(x, y) = 2 * n_neq / (n + n_neq)
+cdef class SokalMichenerDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef int tf1, tf2, n_neq = 0
+        for j in range(size):
+            tf1 = x1[j] != 0
+            tf2 = x2[j] != 0
+            n_neq += (tf1 != tf2)
+        return (2.0 * n_neq) / (size + n_neq)
+
+
+#------------------------------------------------------------
+# Sokal-Sneath Distance (boolean)
+#  D(x, y) = n_neq / (0.5 * n_tt + n_neq)
+cdef class SokalSneathDistance(DistanceMetric):
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        cdef int tf1, tf2, ntt = 0, n_neq = 0
+        for j in range(size):
+            tf1 = x1[j] != 0
+            tf2 = x2[j] != 0
+            n_neq += (tf1 != tf2)
+            ntt += (tf1 and tf2)
+        return n_neq / (0.5 * ntt + n_neq)
 
 
 #------------------------------------------------------------

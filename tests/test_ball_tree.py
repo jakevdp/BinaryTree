@@ -11,7 +11,12 @@ METRICS = {'euclidean':{},
            'chebyshev':{},
            'seuclidean':dict(V=np.random.random(3)),
            'wminkowski':dict(p=3, w=np.random.random(3)),
-           'mahalanobis':dict(V=V)}
+           'mahalanobis':dict(V=V),
+           'hamming':{},
+           'canberra':{},
+           'braycurtis':{}}
+
+BINARY_METRICS = {}
 
 
 def brute_force_neighbors(X, Y, k, metric, **kwargs):
@@ -31,7 +36,8 @@ def test_ball_tree_query():
                                breadth_first=breadth_first)
         dist2, ind2 = brute_force_neighbors(X, Y, k, metric, **kwargs)
 
-        assert_allclose(ind1, ind2)
+        # don't check indices here: if there are any duplicate distances,
+        # the indices may not match.  Distances should not have this problem.
         assert_allclose(dist1, dist2)
 
     for (metric, kwargs) in METRICS.iteritems():
