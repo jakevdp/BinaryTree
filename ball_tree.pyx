@@ -533,10 +533,8 @@ cdef class NodeHeap:
 
     def __init__(self, size_guess=100):
         self.data = np.zeros(size_guess, dtype=NodeHeapData)
-        cdef NodeHeapData_t* data_arr = &self.data[0]
-        for i in range(self.data.shape[0]):
-            data_arr[i].val = INF
-        self.n = 0
+        self.n = size_guess
+        self.clear()
 
     cdef void resize(self, ITYPE_t new_size):
         cdef NodeHeapData_t *data_arr, *new_data_arr
@@ -620,6 +618,13 @@ cdef class NodeHeap:
                 break
         
         return popped_element
+
+    cdef clear(self):
+        """Clear the stack"""
+        cdef NodeHeapData_t* data_arr = &self.data[0]
+        for i in range(self.n):
+            data_arr[i].val = INF
+        self.n = 0
 
 
 ######################################################################
@@ -1538,6 +1543,7 @@ cdef class BallTree:
 
         cdef DTYPE_t* data = &self.data[0, 0]
         cdef ITYPE_t* idx_array = &self.idx_array[0]
+        cdef NodeData_t* node_data = &self.node_data[0]
         cdef ITYPE_t N = self.data.shape[0]
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef DTYPE_t knorm = kernel_norm(h, kernel)
@@ -1564,14 +1570,13 @@ cdef class BallTree:
         while nodeheap.n > 0:
             nodeheap_item = nodeheap.pop()
             i_node = nodeheap_item.i1
-            node_info = self.node_data[i_node]
+            node_info = node_data[i_node]
             N1 = node_info.idx_end - node_info.idx_start
 
             #------------------------------------------------------------
             # Case 1: local bounds are equal to within per-point tolerance.
-            if ((knorm * node_min_bounds[i_node]) >=
-                (knorm * node_max_bounds[i_node]
-                 - (atol + rtol * knorm * node_min_bounds[i_node]) * N1 / N)):
+            if (knorm * (node_max_bounds[i_node] - node_min_bounds[i_node])
+                <= (atol + rtol * knorm * node_min_bounds[i_node]) * N1 / N):
                 pass
 
             #------------------------------------------------------------
@@ -1598,8 +1603,8 @@ cdef class BallTree:
                 i1 = 2 * i_node + 1
                 i2 = 2 * i_node + 2
 
-                N1 = self.node_data[i1].idx_end - self.node_data[i1].idx_start
-                N2 = self.node_data[i2].idx_end - self.node_data[i2].idx_start
+                N1 = node_data[i1].idx_end - node_data[i1].idx_start
+                N2 = node_data[i2].idx_end - node_data[i2].idx_start
 
                 dist_LB_1 = self.min_dist(i1, pt)
                 dist_LB_2 = self.min_dist(i2, pt)
@@ -1624,7 +1629,9 @@ cdef class BallTree:
                 nodeheap_item.val = dist_LB_2
                 nodeheap_item.i1 = i2
                 nodeheap.push(nodeheap_item)
-            #
+
+        nodeheap.clear()
+
         return 0.5 * (global_max_bound + global_min_bound)
 
     cdef void _kernel_density_dual(BallTree self, ITYPE_t i_node1,

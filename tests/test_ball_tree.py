@@ -103,14 +103,15 @@ def test_ball_tree_KDE(n_samples=100, n_features=3):
                    'exponential', 'linear', 'cosine']:
         for h in [0.001, 0.01, 0.1, 1.0]:
             dens_true = compute_kernel_slow(Y, X, kernel, h)
-            def check_results(kernel, h, atol, dualtree):
+            def check_results(kernel, h, atol, rtol, dualtree):
                 dens = bt.kernel_density(Y, h, dualtree=dualtree,
-                                         atol=atol, kernel=kernel)
-                assert_allclose(dens, dens_true, atol=atol, rtol=1E-10)
+                                         atol=atol, rtol=rtol, kernel=kernel)
+                assert_allclose(dens, dens_true, atol=atol, rtol=rtol)
 
-            for atol in [0, 1E-5, 0.1]:
-                for dualtree in (True, False):
-                    yield check_results, kernel, h, atol, dualtree
+            for rtol in [0, 1E-5]:
+                for atol in [1E-10, 1E-5, 0.1]:
+                    for dualtree in (True, False):
+                        yield check_results, kernel, h, atol, rtol, dualtree
 
 
 if __name__ == '__main__':
