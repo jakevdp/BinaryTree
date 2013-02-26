@@ -34,48 +34,10 @@ cdef DTYPE_t ddummy
 cdef DTYPE_t[:] ddummy_view = <DTYPE_t[:1]> &ddummy
 DTYPE = np.asarray(ddummy_view).dtype
 
+# some handy constants
 cdef DTYPE_t INF = np.inf
 cdef DTYPE_t PI = np.pi
 cdef DTYPE_t ROOT_2PI = sqrt(2 * PI)
-
-######################################################################
-# Inline distance functions
-#
-#  We use these for the default (euclidean) case so that they can
-#  be inlined.  This leads to much faster computation for this case.
-cdef inline DTYPE_t euclidean_dist(DTYPE_t* x1, DTYPE_t* x2,
-                                   ITYPE_t size):
-    cdef DTYPE_t tmp, d=0
-    for j in range(size):
-        tmp = x1[j] - x2[j]
-        d += tmp * tmp
-    return sqrt(d)
-
-cdef inline DTYPE_t euclidean_rdist(DTYPE_t* x1, DTYPE_t* x2,
-                                    ITYPE_t size):
-    cdef DTYPE_t tmp, d=0
-    for j in range(size):
-        tmp = x1[j] - x2[j]
-        d += tmp * tmp
-    return d
-
-cdef inline DTYPE_t euclidean_dist_to_rdist(DTYPE_t dist):
-    return dist * dist
-
-cdef inline DTYPE_t euclidean_rdist_to_dist(DTYPE_t dist):
-    return sqrt(dist)
-
-cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
-    if X.shape[1] != Y.shape[1]:
-        raise ValueError('X and Y must have the same second dimension')
-
-    cdef DTYPE_t[:, ::1] D = np.zeros((X.shape[0], Y.shape[0]), dtype=DTYPE)
-
-    for i1 in range(X.shape[0]):
-        for i2 in range(Y.shape[0]):
-            D[i1, i2] = euclidean_dist(&X[i1, 0], &Y[i2, 0], X.shape[1])
-    return D
-
 
 ######################################################################
 # Kernel functions
@@ -159,13 +121,70 @@ cdef inline DTYPE_t kernel_norm(DTYPE_t h, KernelType kernel):
         return 0.25 * PI / h
 
 
+
+######################################################################
+# Inline distance functions
+#
+#  We use these for the default (euclidean) case so that they can be
+#  inlined.  This leads to faster computation for the most common case
+cdef inline DTYPE_t euclidean_dist(DTYPE_t* x1, DTYPE_t* x2,
+                                   ITYPE_t size):
+    cdef DTYPE_t tmp, d=0
+    for j in range(size):
+        tmp = x1[j] - x2[j]
+        d += tmp * tmp
+    return sqrt(d)
+
+cdef inline DTYPE_t euclidean_rdist(DTYPE_t* x1, DTYPE_t* x2,
+                                    ITYPE_t size):
+    cdef DTYPE_t tmp, d=0
+    for j in range(size):
+        tmp = x1[j] - x2[j]
+        d += tmp * tmp
+    return d
+
+cdef inline DTYPE_t euclidean_dist_to_rdist(DTYPE_t dist):
+    return dist * dist
+
+cdef inline DTYPE_t euclidean_rdist_to_dist(DTYPE_t dist):
+    return sqrt(dist)
+
+cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
+    if X.shape[1] != Y.shape[1]:
+        raise ValueError('X and Y must have the same second dimension')
+
+    cdef DTYPE_t[:, ::1] D = np.zeros((X.shape[0], Y.shape[0]), dtype=DTYPE)
+
+    for i1 in range(X.shape[0]):
+        for i2 in range(Y.shape[0]):
+            D[i1, i2] = euclidean_dist(&X[i1, 0], &Y[i2, 0], X.shape[1])
+    return D
+
+
 ######################################################################
 # Distance Metric Classes
 
 #------------------------------------------------------------
 # DistanceMetric base class
 cdef class DistanceMetric:
+    # these attributes are required for subclasses.
+    # we must define them here so that cython's limited polymorphism will work.
+    # because we don't expect to instantiate a lot of these objects, the
+    # memory overhead of this setup should not be an issue.
     cdef DTYPE_t p
+    cdef DTYPE_t[::1] vec
+    cdef DTYPE_t[:, ::1] mat
+    cdef DTYPE_t* vec_ptr
+    cdef DTYPE_t* mat_ptr
+    cdef ITYPE_t size
+
+    def __cinit__(self):
+        self.p = 2
+        self.vec = np.zeros(1, dtype=DTYPE)
+        self.mat = np.zeros((1, 1), dtype=DTYPE)
+        self.vec_ptr = &self.vec[0]
+        self.mat_ptr = &self.mat[0, 0]
+        self.size = 1
 
     @classmethod
     def get_metric(cls, metric, **kwargs):
@@ -177,6 +196,14 @@ cdef class DistanceMetric:
             return EuclideanDistance()
         elif metric in ['manhattan', 'cityblock', 'l1']:
             return ManhattanDistance()
+        elif metric in ['chebyshev', 'infinity']:
+            return ChebyshevDistance()
+        elif metric == 'seuclidean':
+            return SEuclideanDistance(**kwargs)
+        elif metric == 'mahalanobis':
+            return MahalanobisDistance(**kwargs)
+        elif metric == 'wminkowski':
+            return WMinkowskiDistance(**kwargs)
         elif metric in ['minkowski', 'p']:
             p = kwargs.get('p', 2)
             if p == 1:
@@ -244,7 +271,8 @@ cdef class DistanceMetric:
 
 
 #------------------------------------------------------------
-# EuclideanDistance specialization
+# Euclidean Distance
+#  d = sqrt(sum(x_i^2 - y_i^2))
 cdef class EuclideanDistance(DistanceMetric):
     def __init__(self):
         self.p = 2
@@ -268,6 +296,44 @@ cdef class EuclideanDistance(DistanceMetric):
         return dist ** 2
 
 
+#------------------------------------------------------------
+# SEuclidean Distance
+#  d = sqrt(sum((x_i^2 - y_i^2) / v_i))
+cdef class SEuclideanDistance(DistanceMetric):
+    def __init__(self, V):
+        self.vec = np.asarray(V, dtype=DTYPE)
+        self.size = self.vec.shape[0]
+        self.vec_ptr = &self.vec[0]
+        self.p = 2
+
+    cdef inline DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        if size != self.size:
+            raise ValueError('SEuclidean dist: size of V does not match')
+        cdef DTYPE_t tmp, d=0
+        for j in range(size):
+            tmp = x1[j] - x2[j]
+            d += tmp * tmp / self.vec_ptr[j]
+        return d
+
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        return sqrt(self.rdist(x1, x2, size))
+
+    cdef inline DTYPE_t rdist_to_dist(self, DTYPE_t rdist):
+        return sqrt(rdist)
+
+    cdef inline DTYPE_t dist_to_rdist(self, DTYPE_t dist):
+        return dist * dist
+
+    def rdist_to_dist_arr(self, rdist):
+        return np.sqrt(rdist)
+
+    def dist_to_rdist_arr(self, dist):
+        return dist ** 2
+
+
+#------------------------------------------------------------
+# Manhattan Distance
+#  d = sum(abs(x_i) - abs(y_i))
 cdef class ManhattanDistance(DistanceMetric):
     def __init__(self):
         self.p = 1
@@ -279,21 +345,35 @@ cdef class ManhattanDistance(DistanceMetric):
         return d
 
 
-cdef class MinkowskiDistance(DistanceMetric):
-    def __init__(self, p):
-        self.p = p
+#------------------------------------------------------------
+# Chebyshev Distance
+#  d = max_i(abs(x_i) - abs(y_i))
+cdef class ChebyshevDistance(DistanceMetric):
+    def __init__(self):
+        self.p = INF
 
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef DTYPE_t d = 0
         for j in range(size):
-            d += pow(fabs(x1[j] - x2[j]), self.p)
-        return pow(d, 1. / self.p)
+            d = fmax(d, fabs(x1[j] - x2[j]))
+        return d
+
+
+#------------------------------------------------------------
+# Minkowski Distance
+#  d = sum(x_i^p - y_i^p) ^ (1/p)
+cdef class MinkowskiDistance(DistanceMetric):
+    def __init__(self, p):
+        self.p = p
 
     cdef inline DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef DTYPE_t d=0
         for j in range(size):
             d += pow(fabs(x1[j] - x2[j]), self.p)
         return d
+
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        return pow(self.rdist(x1, x2, size), 1. / self.p)
 
     cdef inline DTYPE_t rdist_to_dist(self, DTYPE_t rdist):
         return pow(rdist, 1. / self.p)
@@ -306,6 +386,104 @@ cdef class MinkowskiDistance(DistanceMetric):
 
     def dist_to_rdist_arr(self, dist):
         return dist ** self.p
+
+
+#------------------------------------------------------------
+# W-Minkowski Distance
+#  d = sum(w_i * (x_i^p - y_i^p)) ^ (1/p)
+cdef class WMinkowskiDistance(DistanceMetric):
+    def __init__(self, p, w):
+        self.vec = np.asarray(w, dtype=DTYPE)
+        self.size = self.vec.shape[0]
+        self.vec_ptr = &self.vec[0]
+        self.p = p
+
+    cdef inline DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        if size != self.size:
+            raise ValueError('SEuclidean dist: size of V does not match')
+        cdef DTYPE_t d=0
+        for j in range(size):
+            d += pow(self.vec_ptr[j] * fabs(x1[j] - x2[j]), self.p)
+        return d
+
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        return pow(self.rdist(x1, x2, size), 1. / self.p)
+
+    cdef inline DTYPE_t rdist_to_dist(self, DTYPE_t rdist):
+        return pow(rdist, 1. / self.p)
+
+    cdef inline DTYPE_t dist_to_rdist(self, DTYPE_t dist):
+        return pow(dist, self.p)
+
+    def rdist_to_dist_arr(self, rdist):
+        return rdist ** (1. / self.p)
+
+    def dist_to_rdist_arr(self, dist):
+        return dist ** self.p
+
+
+#------------------------------------------------------------
+# Mahalanobis Distance
+#  d = sqrt( (x - y)^T V^-1 (x - y) )
+cdef class MahalanobisDistance(DistanceMetric):
+    def __init__(self, V=None, VI=None):
+        if VI is None:
+            VI = np.linalg.inv(V)
+        if VI.ndim != 2 or VI.shape[0] != VI.shape[1]:
+            raise ValueError("V/VI must be square")
+        self.mat = np.asarray(VI, dtype=float, order='C')
+        self.mat_ptr = &self.mat[0, 0]
+        self.size = self.mat.shape[0]
+
+        # we need vec as a work buffer
+        self.vec = np.zeros(self.size, dtype=DTYPE)
+        self.vec_ptr = &self.vec[0]
+
+    cdef inline DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        if size != self.size:
+            raise ValueError('Mahalanobis dist: size of V does not match')
+
+        cdef DTYPE_t tmp, d = 0
+        
+        # compute (x1 - x2).T * VI * (x1 - x2)
+        for i in range(size):
+            self.vec_ptr[i] = x1[i] - x2[i]
+        
+        for i in range(size):
+            tmp = 0
+            for j in range(size):
+                tmp += self.mat_ptr[i * size + j] * self.vec_ptr[j]
+            d += tmp * self.vec_ptr[i]
+        return d
+
+    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+        return sqrt(self.rdist(x1, x2, size))
+
+    cdef inline DTYPE_t rdist_to_dist(self, DTYPE_t rdist):
+        return sqrt(rdist)
+
+    cdef inline DTYPE_t dist_to_rdist(self, DTYPE_t dist):
+        return dist * dist
+
+    def rdist_to_dist_arr(self, rdist):
+        return np.sqrt(rdist)
+
+    def dist_to_rdist_arr(self, dist):
+        return dist ** 2
+
+
+#------------------------------------------------------------
+# Cosine Distance
+# This is not a true metric, so we comment it out.
+#  d = dot(x, y) / (|x| * |y|)
+#cdef class CosineDistance(DistanceMetric):
+#    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+#        cdef DTYPE_t d = 0, norm1 = 0, norm2 = 0
+#        for j in range(size):
+#            d += x1[j] * x2[j]
+#            norm1 += x1[j] * x1[j]
+#            norm2 += x2[j] * x2[j]
+#        return 1.0 - d / sqrt(norm1 * norm2)
 
 
 ######################################################################

@@ -8,15 +8,23 @@ from ball_tree import DistanceMetric
 
 
 class TestMetrics:
-    metrics = {'euclidean':{},
-               'cityblock':{},
-               'minkowski':dict(p=(1, 1.5, 2, 3))}
-
     def __init__(self, n1=5, n2=6, d=4, zero_frac=0.5,
                  rseed=0, dtype=np.float64):
         np.random.seed(rseed)
         self.X1 = np.random.random((n1, d)).astype(dtype)
         self.X2 = np.random.random((n2, d)).astype(dtype)
+
+        V = np.random.random((d, d))
+        VI = np.dot(V, V.T)
+
+        self.metrics = {'euclidean':{},
+                        'cityblock':{},
+                        'minkowski':dict(p=(1, 1.5, 2, 3)),
+                        'chebyshev':{},
+                        'seuclidean':dict(V=(np.random.random(d),)),
+                        'wminkowski':dict(p=(1, 1.5, 3),
+                                          w=(np.random.random(d),)),
+                        'mahalanobis':dict(VI=(VI,))}
 
     def test_cdist(self):
         for metric, argdict in self.metrics.iteritems():

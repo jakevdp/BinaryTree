@@ -2,9 +2,16 @@ import numpy as np
 from numpy.testing import assert_allclose
 from ball_tree import BallTree, DistanceMetric
 
+V = np.random.random((3, 3))
+V = np.dot(V, V.T)
+
 METRICS = {'euclidean':{},
            'manhattan':{},
-           'minkowski':{'p':3}}
+           'minkowski':dict(p=3),
+           'chebyshev':{},
+           'seuclidean':dict(V=np.random.random(3)),
+           'wminkowski':dict(p=3, w=np.random.random(3)),
+           'mahalanobis':dict(V=V)}
 
 
 def brute_force_neighbors(X, Y, k, metric, **kwargs):
