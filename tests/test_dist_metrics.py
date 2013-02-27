@@ -33,7 +33,7 @@ class TestMetrics:
                         'canberra':{},
                         'braycurtis':{}}
 
-        self.bool_metrics = ['yule', 'matching', 'jaccard', 'dice',
+        self.bool_metrics = ['matching', 'jaccard', 'dice',
                              'kulsinski', 'rogerstanimoto', 'russellrao',
                              'sokalmichener', 'sokalsneath']
 

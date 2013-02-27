@@ -218,8 +218,6 @@ cdef class DistanceMetric:
                 return EuclideanDistance()
             else:
                 return MinkowskiDistance(p)
-        elif metric == 'yule':
-            return YuleDistance()
         elif metric == 'matching':
             return MatchingDistance()
         elif metric == 'hamming':
@@ -539,23 +537,6 @@ cdef class BrayCurtisDistance(DistanceMetric):
 
 
 #------------------------------------------------------------
-# Yule Distance (boolean)
-#  D(x, y) = 2 * ntf * nft / (ntt * nff + ntf * nft)
-cdef class YuleDistance(DistanceMetric):
-    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
-        cdef int tf1, tf2, ntf = 0, nft = 0, ntt = 0, nff = 0
-        for j in range(size):
-            tf1 = x1[j] != 0
-            tf2 = x2[j] != 0
-
-            ntt += tf1 and tf2
-            ntf += tf1 and (tf2 == 0)
-            nft += (tf1 == 0) and tf2
-        nff = size - ntt - ntf - nft
-        return (2.0 * ntf * nft) / (ntt * nff + ntf * nft)
-
-
-#------------------------------------------------------------
 # Jaccard Distance (boolean)
 #  D(x, y) = N_unequal(x, y) / N_nonzero(x, y)
 cdef class JaccardDistance(DistanceMetric):
@@ -664,9 +645,28 @@ cdef class SokalSneathDistance(DistanceMetric):
 
 
 #------------------------------------------------------------
+# Yule Distance (boolean)
+#  D(x, y) = 2 * ntf * nft / (ntt * nff + ntf * nft)
+# [This is not a true metric, so we will leave it out.]
+#
+#cdef class YuleDistance(DistanceMetric):
+#    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+#        cdef int tf1, tf2, ntf = 0, nft = 0, ntt = 0, nff = 0
+#        for j in range(size):
+#            tf1 = x1[j] != 0
+#            tf2 = x2[j] != 0
+#            ntt += tf1 and tf2
+#            ntf += tf1 and (tf2 == 0)
+#            nft += (tf1 == 0) and tf2
+#        nff = size - ntt - ntf - nft
+#        return (2.0 * ntf * nft) / (ntt * nff + ntf * nft)
+
+
+#------------------------------------------------------------
 # Cosine Distance
-# This is not a true metric, so we comment it out.
-#  d = dot(x, y) / (|x| * |y|)
+#  D(x, y) = dot(x, y) / (|x| * |y|)
+# [This is not a true metric, so we will leave it out.]
+#
 #cdef class CosineDistance(DistanceMetric):
 #    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
 #        cdef DTYPE_t d = 0, norm1 = 0, norm2 = 0
@@ -675,6 +675,32 @@ cdef class SokalSneathDistance(DistanceMetric):
 #            norm1 += x1[j] * x1[j]
 #            norm2 += x2[j] * x2[j]
 #        return 1.0 - d / sqrt(norm1 * norm2)
+
+
+#------------------------------------------------------------
+# Correlation Distance
+#  D(x, y) = dot((x - mx), (y - my)) / (|x - mx| * |y - my|)
+# [This is not a true metric, so we will leave it out.]
+#
+#cdef class CorrelationDistance(DistanceMetric):
+#    cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
+#        cdef DTYPE_t mu1 = 0, mu2 = 0, x1nrm = 0, x2nrm = 0, x1Tx2 = 0
+#        cdef DTYPE_t tmp1, tmp2
+#
+#        for i in range(size):
+#            mu1 += x1[i]
+#            mu2 += x2[i]
+#        mu1 /= size
+#        mu2 /= size
+#
+#        for i in range(size):
+#            tmp1 = x1[i] - mu1
+#            tmp2 = x2[i] - mu2
+#            x1nrm += tmp1 * tmp1
+#            x2nrm += tmp2 * tmp2
+#            x1Tx2 += tmp1 * tmp2
+#
+#        return (1. - x1Tx2) / sqrt(x1nrm * x2nrm)
 
 
 ######################################################################

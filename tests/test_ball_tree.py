@@ -5,18 +5,23 @@ from ball_tree import BallTree, DistanceMetric
 V = np.random.random((3, 3))
 V = np.dot(V, V.T)
 
+DIMENSION = 3
+
 METRICS = {'euclidean':{},
            'manhattan':{},
            'minkowski':dict(p=3),
            'chebyshev':{},
-           'seuclidean':dict(V=np.random.random(3)),
-           'wminkowski':dict(p=3, w=np.random.random(3)),
-           'mahalanobis':dict(V=V),
-           'hamming':{},
-           'canberra':{},
-           'braycurtis':{}}
+           'seuclidean':dict(V=np.random.random(DIMENSION)),
+           'wminkowski':dict(p=3, w=np.random.random(DIMENSION)),
+           'mahalanobis':dict(V=V)}
 
-BINARY_METRICS = {}
+DISCRETE_METRICS = ['hamming',
+                    'canberra',
+                    'braycurtis']
+
+BOOLEAN_METRICS = ['matching', 'jaccard', 'dice', 'kulsinski',
+                   'rogerstanimoto', 'russellrao', 'sokalmichener',
+                   'sokalsneath']
 
 
 def brute_force_neighbors(X, Y, k, metric, **kwargs):
@@ -27,8 +32,9 @@ def brute_force_neighbors(X, Y, k, metric, **kwargs):
 
 
 def test_ball_tree_query():
-    X = np.random.random((40, 3))
-    Y = np.random.random((10, 3))
+    np.random.seed(0)
+    X = np.random.random((40, DIMENSION))
+    Y = np.random.random((10, DIMENSION))
 
     def check_neighbors(dualtree, breadth_first, k, metric, kwargs):
         bt = BallTree(X, leaf_size=1, metric=metric, **kwargs)
@@ -49,7 +55,40 @@ def test_ball_tree_query():
                            k, metric, kwargs)
 
 
+def test_ball_tree_query_boolean_metrics():
+    np.random.seed(0)
+    X = np.random.random((40, 10)).round(0)
+    Y = np.random.random((10, 10)).round(0)
+    k = 5
+
+    def check_neighbors(metric):
+        bt = BallTree(X, leaf_size=1, metric=metric)
+        dist1, ind1 = bt.query(Y, k)
+        dist2, ind2 = brute_force_neighbors(X, Y, k, metric)
+        assert_allclose(dist1, dist2)
+
+    for metric in BOOLEAN_METRICS:
+        yield check_neighbors, metric
+
+
+def test_ball_tree_query_discrete_metrics():
+    np.random.seed(0)
+    X = (4 * np.random.random((40, 10))).round(0)
+    Y = (4 * np.random.random((10, 10))).round(0)
+    k = 5
+
+    def check_neighbors(metric):
+        bt = BallTree(X, leaf_size=1, metric=metric)
+        dist1, ind1 = bt.query(Y, k)
+        dist2, ind2 = brute_force_neighbors(X, Y, k, metric)
+        assert_allclose(dist1, dist2)
+
+    for metric in DISCRETE_METRICS:
+        yield check_neighbors, metric
+
+
 def test_ball_tree_query_radius(n_samples=100, n_features=10):
+    np.random.seed(0)
     X = 2 * np.random.random(size=(n_samples, n_features)) - 1
     query_pt = np.zeros(n_features, dtype=float)
 
@@ -68,6 +107,7 @@ def test_ball_tree_query_radius(n_samples=100, n_features=10):
 
 
 def test_ball_tree_query_radius_distance(n_samples=100, n_features=10):
+    np.random.seed(0)
     X = 2 * np.random.random(size=(n_samples, n_features)) - 1
     query_pt = np.zeros(n_features, dtype=float)
 
@@ -108,6 +148,7 @@ def compute_kernel_slow(Y, X, kernel, h):
     
 
 def test_ball_tree_KDE(n_samples=100, n_features=3):
+    np.random.seed(0)
     X = np.random.random((n_samples, n_features))
     Y = np.random.random((n_samples, n_features))
     bt = BallTree(X, leaf_size=10)
