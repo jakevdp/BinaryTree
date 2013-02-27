@@ -186,6 +186,31 @@ cdef class DistanceMetric:
         self.mat_ptr = &self.mat[0, 0]
         self.size = 1
 
+    def __reduce__(self):
+        """
+        reduce method used for pickling
+        """
+        return (newObj, (self.__class__,), self.__getstate__())
+
+    def __getstate__(self):
+        """
+        get state for pickling
+        """
+        return (float(self.p),
+                np.asarray(self.vec),
+                np.asarray(self.mat))
+
+    def __setstate__(self, state):
+        """
+        set state for pickling
+        """
+        self.p = state[0]
+        self.vec = state[1]
+        self.mat = state[2]
+        self.vec_ptr = &self.vec[0]
+        self.mat_ptr = &self.mat[0, 0]
+        self.size = 1
+
     @classmethod
     def get_metric(cls, metric, **kwargs):
         if isinstance(metric, DistanceMetric):
@@ -1017,6 +1042,13 @@ cdef class NodeHeap:
 
 
 ######################################################################
+# newObj function
+#  this is a helper function for pickling
+def newObj(obj):
+    return obj.__new__(obj)
+
+
+######################################################################
 # Ball Tree class
 
 cdef struct NodeData_t:
@@ -1061,6 +1093,9 @@ cdef class BallTree:
         self.leaf_size = 0
         self.n_levels = 0
         self.n_nodes = 0
+        self.n_trims = 0
+        self.n_leaves = 0
+        self.n_splits = 0
         self.n_calls = 0
         self.euclidean = False
 
@@ -1094,6 +1129,48 @@ cdef class BallTree:
         # Allocate tree-specific data from TreeBase
         self.allocate_data(self.n_nodes, n_features)        
         self._recursive_build(0, 0, n_samples)
+
+    def __reduce__(self):
+        """
+        reduce method used for pickling
+        """
+        return (newObj, (BallTree,), self.__getstate__())
+
+    def __getstate__(self):
+        """
+        get state for pickling
+        """
+        return (np.asarray(self.data),
+                np.asarray(self.idx_array),
+                np.asarray(self.node_data),
+                np.asarray(self.centroids),
+                int(self.leaf_size),
+                int(self.n_levels),
+                int(self.n_nodes),
+                int(self.n_trims),
+                int(self.n_leaves),
+                int(self.n_splits),
+                int(self.n_calls),
+                self.dm)
+
+    def __setstate__(self, state):
+        """
+        set state for pickling
+        """
+        print state
+        self.data = state[0]
+        self.idx_array = state[1]
+        self.node_data = state[2]
+        self.centroids = state[3]
+        self.leaf_size = state[4]
+        self.n_levels = state[5]
+        self.n_nodes = state[6]
+        self.n_trims = state[7]
+        self.n_leaves = state[8]
+        self.n_splits = state[9]
+        self.n_calls = state[10]
+        self.dm = state[11]
+        self.euclidean = (self.dm.__class__.__name__ == 'EuclideanDistance')
 
     def get_tree_stats(self):
         return (self.n_trims, self.n_leaves, self.n_splits)

@@ -173,6 +173,24 @@ def test_ball_tree_KDE(n_samples=100, n_features=3):
                                    dualtree, breadth_first)
 
 
+def test_ball_tree_pickle():
+    import pickle
+    np.random.seed(0)
+    X = np.random.random((10, 3))
+    bt1 = BallTree(X, leaf_size=1)
+    ind1, dist1 = bt1.query(X)
+
+    def check_pickle_protocol(protocol):
+        s = pickle.dumps(bt1, protocol=protocol)
+        bt2 = pickle.loads(s)
+        ind2, dist2 = bt2.query(X)
+        assert_allclose(ind1, ind2)
+        assert_allclose(dist1, dist2)
+
+    for protocol in (0, 1, 2):
+        yield check_pickle_protocol, protocol
+
+
 if __name__ == '__main__':
     import nose
     nose.runmodule()
