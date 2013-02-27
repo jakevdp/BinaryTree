@@ -2,7 +2,7 @@ from time import time
 import numpy as np
 from scipy.spatial.distance import cdist
 import ball_tree
-from ball_tree import BallTree, DTYPE, ITYPE
+from ball_tree import DTYPE, ITYPE, BallTree
 from sklearn.neighbors import BallTree as skBallTree
 
 
@@ -205,8 +205,8 @@ def bench_KDE(N=1000, D=3, h=0.5, leaf_size=30):
               
 
 if __name__ == '__main__':
-    #bench_simultaneous_sort()
-    #bench_neighbors_heap()
-    #bench_euclidean_dist()
-    #bench_ball_tree()
+    bench_simultaneous_sort()
+    bench_neighbors_heap()
+    bench_euclidean_dist()
+    bench_ball_tree()
     bench_KDE()
