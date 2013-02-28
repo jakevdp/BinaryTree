@@ -1067,8 +1067,7 @@ cdef class KDTree:
     cdef readonly DTYPE_t[:, ::1] data
     cdef public ITYPE_t[::1] idx_array
     cdef public NodeData_t[::1] node_data
-    cdef public DTYPE_t[:, ::1] lower_bounds
-    cdef public DTYPE_t[:, ::1] upper_bounds
+    cdef public DTYPE_t[:, :, ::1] node_bounds
 
     cdef ITYPE_t leaf_size
     cdef ITYPE_t n_levels
@@ -1089,8 +1088,7 @@ cdef class KDTree:
         self.data = np.empty((0, 1), dtype=DTYPE, order='C')
         self.idx_array = np.empty(0, dtype=ITYPE, order='C')
         self.node_data = np.empty(0, dtype=NodeData, order='C')
-        self.lower_bounds = np.empty((0, 1), dtype=DTYPE)
-        self.upper_bounds = np.empty((0, 1), dtype=DTYPE)
+        self.node_bounds = np.empty((0, 0, 1), dtype=DTYPE)
 
         self.leaf_size = 0
         self.n_levels = 0
@@ -1145,8 +1143,7 @@ cdef class KDTree:
         return (np.asarray(self.data),
                 np.asarray(self.idx_array),
                 np.asarray(self.node_data),
-                np.asarray(self.lower_bounds),
-                np.asarray(self.upper_bounds),
+                np.asarray(self.node_bounds),
                 int(self.leaf_size),
                 int(self.n_levels),
                 int(self.n_nodes),
@@ -1164,16 +1161,15 @@ cdef class KDTree:
         self.data = state[0]
         self.idx_array = state[1]
         self.node_data = state[2]
-        self.lower_bounds = state[3]
-        self.upper_bounds = state[4]
-        self.leaf_size = state[5]
-        self.n_levels = state[6]
-        self.n_nodes = state[7]
-        self.n_trims = state[8]
-        self.n_leaves = state[9]
-        self.n_splits = state[10]
-        self.n_calls = state[11]
-        self.dm = state[12]
+        self.node_bounds = state[3]
+        self.leaf_size = state[4]
+        self.n_levels = state[5]
+        self.n_nodes = state[6]
+        self.n_trims = state[7]
+        self.n_leaves = state[8]
+        self.n_splits = state[9]
+        self.n_calls = state[10]
+        self.dm = state[11]
         self.euclidean = (self.dm.__class__.__name__ == 'EuclideanDistance')
 
     def get_tree_stats(self):
@@ -2396,11 +2392,10 @@ cdef class KDTree:
     # The following methods can be changed to produce a different tree type
     def get_arrays(self):
         return map(np.asarray, (self.data, self.idx_array, self.node_data,
-                                self.lower_bounds, self.upper_bounds))
+                                self.node_bounds))
 
     cdef void allocate_data(self, ITYPE_t n_nodes, ITYPE_t n_features):
-        self.lower_bounds = np.zeros((n_nodes, n_features), dtype=DTYPE)
-        self.upper_bounds = np.zeros((n_nodes, n_features), dtype=DTYPE)
+        self.node_bounds = np.zeros((2, n_nodes, n_features), dtype=DTYPE)
 
     cdef void init_node(self, ITYPE_t i_node,
                         ITYPE_t idx_start, ITYPE_t idx_end):
@@ -2409,17 +2404,17 @@ cdef class KDTree:
 
         # determine Node bounds
         for j in range(n_features):
-            self.lower_bounds[i_node, j] = INF
-            self.upper_bounds[i_node, j] = -INF
+            self.node_bounds[0, i_node, j] = INF
+            self.node_bounds[1, i_node, j] = -INF
 
         for i in range(idx_start, idx_end):
             idx_i = self.idx_array[i]
             for j in range(n_features):
-                self.lower_bounds[i_node, j] =\
-                    fmin(self.lower_bounds[i_node, j],
+                self.node_bounds[0, i_node, j] =\
+                    fmin(self.node_bounds[0, i_node, j],
                          self.data[idx_i, j])
-                self.upper_bounds[i_node, j] =\
-                    fmax(self.upper_bounds[i_node, j],
+                self.node_bounds[1, i_node, j] =\
+                    fmax(self.node_bounds[1, i_node, j],
                          self.data[idx_i, j])
 
         self.node_data[i_node].idx_start = idx_start
@@ -2432,8 +2427,8 @@ cdef class KDTree:
 
         # here we'll use the fact that x + abs(x) = 2 * max(x, 0)
         for j in range(n_features):
-            d_lo = self.lower_bounds[i_node, j] - pt[j]
-            d_hi = pt[j] - self.upper_bounds[i_node, j]
+            d_lo = self.node_bounds[0, i_node, j] - pt[j]
+            d_hi = pt[j] - self.node_bounds[1, i_node, j]
             d = (d_lo + fabs(d_lo)) + (d_hi + fabs(d_hi))
             rdist += pow(0.5 * d, self.dm.p)
 
@@ -2449,8 +2444,8 @@ cdef class KDTree:
         cdef ITYPE_t j
 
         for j in range(n_features):
-            d_lo = fabs(pt[j] - self.lower_bounds[i_node, j])
-            d_hi = fabs(pt[j] - self.upper_bounds[i_node, j])
+            d_lo = fabs(pt[j] - self.node_bounds[0, i_node, j])
+            d_hi = fabs(pt[j] - self.node_bounds[1, i_node, j])
             rdist += pow(fmax(d_lo, d_hi), self.dm.p)
 
         return rdist
@@ -2468,8 +2463,10 @@ cdef class KDTree:
 
         # here we'll use the fact that x + abs(x) = 2 * max(x, 0)
         for j in range(n_features):
-            d1 = self.lower_bounds[i_node1, j] - other.upper_bounds[i_node2, j]
-            d2 = other.lower_bounds[i_node2, j] - self.upper_bounds[i_node1, j]
+            d1 = (self.node_bounds[0, i_node1, j]
+                  - other.node_bounds[1, i_node2, j])
+            d2 = (other.node_bounds[0, i_node2, j]
+                  - self.node_bounds[1, i_node1, j])
             d = (d1 + fabs(d1)) + (d2 + fabs(d2))
 
             rdist += pow(0.5 * d, self.dm.p)
@@ -2490,10 +2487,10 @@ cdef class KDTree:
         cdef ITYPE_t j
 
         for j in range(n_features):
-            d1 = fabs(self.lower_bounds[i_node1, j]
-                      - other.upper_bounds[i_node2, j])
-            d2 = fabs(self.upper_bounds[i_node1, j]
-                      - other.lower_bounds[i_node2, j])
+            d1 = fabs(self.node_bounds[0, i_node1, j]
+                      - other.node_bounds[1, i_node2, j])
+            d2 = fabs(self.node_bounds[1, i_node1, j]
+                      - other.node_bounds[0, i_node2, j])
             rdist += pow(fmax(d1, d2), self.dm.p)
 
         return rdist

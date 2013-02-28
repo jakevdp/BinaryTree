@@ -1,7 +1,3 @@
-1) write KDTree unit tests
-
-2) write a BallTree / KDTree benchmarking framework
-
 3) Change lower_bounds/upper_bounds and centroids to a single 3-dim
    array variable, node_geometry, which can be used in both.
 
@@ -14,3 +10,5 @@
 6) factor distance metrics to a new file & document
 
 7) Document the module.
+
+8) Write _query_radius_count_only and _query_radius_idx_only

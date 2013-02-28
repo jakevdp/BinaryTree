@@ -1067,7 +1067,7 @@ cdef class BallTree:
     cdef readonly DTYPE_t[:, ::1] data
     cdef public ITYPE_t[::1] idx_array
     cdef public NodeData_t[::1] node_data
-    cdef public DTYPE_t[:, ::1] centroids
+    cdef public DTYPE_t[:, :, ::1] node_bounds
 
     cdef ITYPE_t leaf_size
     cdef ITYPE_t n_levels
@@ -1088,7 +1088,7 @@ cdef class BallTree:
         self.data = np.empty((0, 1), dtype=DTYPE, order='C')
         self.idx_array = np.empty(0, dtype=ITYPE, order='C')
         self.node_data = np.empty(0, dtype=NodeData, order='C')
-        self.centroids = np.empty((0, 1), dtype=DTYPE)
+        self.node_bounds = np.empty((0, 0, 1), dtype=DTYPE)
 
         self.leaf_size = 0
         self.n_levels = 0
@@ -1143,7 +1143,7 @@ cdef class BallTree:
         return (np.asarray(self.data),
                 np.asarray(self.idx_array),
                 np.asarray(self.node_data),
-                np.asarray(self.centroids),
+                np.asarray(self.node_bounds),
                 int(self.leaf_size),
                 int(self.n_levels),
                 int(self.n_nodes),
@@ -1161,7 +1161,7 @@ cdef class BallTree:
         self.data = state[0]
         self.idx_array = state[1]
         self.node_data = state[2]
-        self.centroids = state[3]
+        self.node_bounds = state[3]
         self.leaf_size = state[4]
         self.n_levels = state[5]
         self.n_nodes = state[6]
@@ -2392,10 +2392,10 @@ cdef class BallTree:
     # The following methods can be changed to produce a different tree type
     def get_arrays(self):
         return map(np.asarray, (self.data, self.idx_array, self.node_data,
-                                self.centroids))
+                                self.node_bounds))
 
     cdef void allocate_data(self, ITYPE_t n_nodes, ITYPE_t n_features):
-        self.centroids = np.zeros((n_nodes, n_features), dtype=DTYPE)
+        self.node_bounds = np.zeros((1, n_nodes, n_features), dtype=DTYPE)
 
     cdef void init_node(self, ITYPE_t i_node,
                         ITYPE_t idx_start, ITYPE_t idx_end):
@@ -2408,7 +2408,7 @@ cdef class BallTree:
 
         cdef ITYPE_t* idx_array = &self.idx_array[0]
         cdef DTYPE_t* data = &self.data[0, 0]
-        cdef DTYPE_t* centroid = &self.centroids[i_node, 0]
+        cdef DTYPE_t* centroid = &self.node_bounds[0, i_node, 0]
 
         # determine Node centroid
         for j in range(n_features):
@@ -2435,12 +2435,12 @@ cdef class BallTree:
         self.node_data[i_node].idx_end = idx_end
 
     cdef inline DTYPE_t min_dist(self, ITYPE_t i_node, DTYPE_t* pt):
-        cdef DTYPE_t dist_pt = self.dist(pt, &self.centroids[i_node, 0],
+        cdef DTYPE_t dist_pt = self.dist(pt, &self.node_bounds[0, i_node, 0],
                                          self.data.shape[1])
         return fmax(0, dist_pt - self.node_data[i_node].radius)
 
     cdef inline DTYPE_t max_dist(self, ITYPE_t i_node, DTYPE_t* pt):
-        cdef DTYPE_t dist_pt = self.dist(pt, &self.centroids[i_node, 0],
+        cdef DTYPE_t dist_pt = self.dist(pt, &self.node_bounds[0, i_node, 0],
                                          self.data.shape[1])
         return dist_pt + self.node_data[i_node].radius
 
@@ -2458,16 +2458,16 @@ cdef class BallTree:
 
     cdef inline DTYPE_t min_dist_dual(self, ITYPE_t i_node1,
                                       BallTree other, ITYPE_t i_node2):
-        cdef DTYPE_t dist_pt = self.dist(&other.centroids[i_node2, 0],
-                                          &self.centroids[i_node1, 0],
+        cdef DTYPE_t dist_pt = self.dist(&other.node_bounds[0, i_node2, 0],
+                                          &self.node_bounds[0, i_node1, 0],
                                           self.data.shape[1])
         return fmax(0, (dist_pt - self.node_data[i_node1].radius
                         - other.node_data[i_node2].radius))
 
     cdef inline DTYPE_t max_dist_dual(self, ITYPE_t i_node1,
                                       BallTree other, ITYPE_t i_node2):
-        cdef DTYPE_t dist_pt = self.dist(&other.centroids[i_node2, 0],
-                                          &self.centroids[i_node1, 0],
+        cdef DTYPE_t dist_pt = self.dist(&other.node_bounds[0, i_node2, 0],
+                                          &self.node_bounds[0, i_node1, 0],
                                           self.data.shape[1])
         return (dist_pt + self.node_data[i_node1].radius
                 + other.node_data[i_node2].radius)
