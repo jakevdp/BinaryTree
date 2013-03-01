@@ -11,6 +11,14 @@ import numpy as np
 import warnings
 
 ######################################################################
+# Define doc strings.
+#  We define them here so we can substitute relevant pieces within
+#  BallTree and KDTree.  pyx files which include this file should
+#  define a DOC_DICT variable.
+CLASS_DOC = """{BinaryTree} class""".format(**DOC_DICT)
+
+
+######################################################################
 # Define types
 
 # Floating point/data type
@@ -1064,7 +1072,8 @@ NodeData = np.asarray(dummy_view).dtype
 
 
 cdef class BinaryTree:
-    __doc__ = """{BinaryTree} class""".format(**DOC_DICT)
+    __doc__ = CLASS_DOC
+
     cdef readonly DTYPE_t[:, ::1] data
     cdef public ITYPE_t[::1] idx_array
     cdef public NodeData_t[::1] node_data
@@ -1249,7 +1258,7 @@ cdef class BinaryTree:
         """
         query(X, k=1, return_distance=True)
 
-        query the Ball Tree for the k nearest neighbors
+        query the tree for the k nearest neighbors
 
         Parameters
         ----------
@@ -1281,7 +1290,7 @@ cdef class BinaryTree:
             # >>> import numpy as np
             # >>> np.random.seed(0)
             # >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
-            # >>> tree = {BinaryTree}(X, leaf_size=2)
+            # >>> tree = BinaryTree(X, leaf_size=2)
             # >>> dist, ind = tree.query(X, 3)
             # >>> print ind  # indices of 3 closest neighbors
             # [0 3 1]
@@ -1353,7 +1362,6 @@ cdef class BinaryTree:
                     indices.reshape(X.shape[:-1] + (k,)))
         else:
             return indices.reshape(X.shape[:-1] + (k,))
-
 
     def query_radius(self, X, r, return_distance=False,
                      int count_only=False, int sort_results=False):
@@ -2164,8 +2172,7 @@ cdef class BinaryTree:
         N2 = self.data.shape[0]
 
         #------------------------------------------------------------
-        # Case 1: local bounds are equal.  Return
-        #   (note: we use inequality for roundoff errors)
+        # Case 1: local bounds are equal to within errors.  Return
         if ((knorm * local_min_bound) >=
             (knorm * local_max_bound
              - (atol + rtol * knorm * local_min_bound) * N1 / N2)):
@@ -2267,23 +2274,14 @@ cdef class BinaryTree:
             dens_UB = compute_kernel(dist_LB, h, kernel)
 
             #------------------------------------------------------------
-            # Case 1: points are all far enough that contribution is zero
-            #         to within the desired tolerance
-            if knorm * dens_UB <= atol:
-                dens_UB *= (node_info1.idx_end - node_info1.idx_start)
-                for i2 in range(node_info2.idx_start, node_info2.idx_end):
-                    density[idx_array2[i2]] += dens_UB
-        
-            #------------------------------------------------------------
-            # Case 2: points are all close enough that the contribution
-            #         is maximal to within the desired tolerance
-            elif knorm * dens_LB >= knorm - atol:
+            # Case 1: nodes are within desired tolerance
+            if dens_LB * knorm + atol >= dens_UB * knorm:
                 dens_LB *= (node_info1.idx_end - node_info1.idx_start)
                 for i2 in range(node_info2.idx_start, node_info2.idx_end):
                     density[idx_array2[i2]] += dens_LB
 
             #------------------------------------------------------------
-            # Case 3: both nodes are leaves: go through all pairs
+            # Case 2: both nodes are leaves: go through all pairs
             elif node_info1.is_leaf and node_info2.is_leaf:
                 for i2 in range(node_info2.idx_start, node_info2.idx_end):
                     for i1 in range(node_info1.idx_start, node_info1.idx_end):
@@ -2294,7 +2292,7 @@ cdef class BinaryTree:
                                                                   kernel)
 
             #------------------------------------------------------------
-            # Case 4a: only one node is a leaf: split the other
+            # Case 3a: only one node is a leaf: split the other
             elif node_info1.is_leaf:
                 for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
                     nodeheap_item.val = min_dist_dual(self, i_node1, other, i2)
@@ -2310,7 +2308,7 @@ cdef class BinaryTree:
                     nodeheap.push(nodeheap_item)
 
             #------------------------------------------------------------
-            # Case 4b: both nodes need to be split
+            # Case 3b: both nodes need to be split
             else:
                 for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
                     for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
@@ -2351,21 +2349,13 @@ cdef class BinaryTree:
         #------------------------------------------------------------
         # Case 1: points are all far enough that contribution is zero
         #         to within the desired tolerance
-        if knorm * dens_UB <= atol:
-            dens_UB *= (node_info1.idx_end - node_info1.idx_start)
-            for i2 in range(node_info2.idx_start, node_info2.idx_end):
-                density[idx_array2[i2]] += dens_UB
-        
-        #------------------------------------------------------------
-        # Case 2: points are all close enough that the contribution
-        #         is maximal to within the desired tolerance
-        elif knorm * dens_LB >= knorm - atol:
+        if dens_LB * knorm + atol >= dens_UB * knorm:
             dens_LB *= (node_info1.idx_end - node_info1.idx_start)
             for i2 in range(node_info2.idx_start, node_info2.idx_end):
                 density[idx_array2[i2]] += dens_LB
 
         #------------------------------------------------------------
-        # Case 3: both nodes are leaves: go through all pairs
+        # Case 2: both nodes are leaves: go through all pairs
         elif node_info1.is_leaf and node_info2.is_leaf:
             for i2 in range(node_info2.idx_start, node_info2.idx_end):
                 for i1 in range(node_info1.idx_start, node_info1.idx_end):
@@ -2376,7 +2366,7 @@ cdef class BinaryTree:
                                                               kernel)
 
         #------------------------------------------------------------
-        # Case 4a: only one node is a leaf: split the other
+        # Case 3a: only one node is a leaf: split the other
         elif node_info1.is_leaf:
             for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
                 self._kde_dual_depthfirst(i_node1, other, i2, kernel,
@@ -2388,7 +2378,7 @@ cdef class BinaryTree:
                                           h, atol, density)
 
         #------------------------------------------------------------
-        # Case 4b: both nodes need to be split
+        # Case 3b: both nodes need to be split
         else:
             for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
                 for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
