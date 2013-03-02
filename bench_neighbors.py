@@ -15,7 +15,9 @@ def time_func(executable, *args, **kwargs):
     return t * 1. / N
 
 
-def bench_trees(N=2000, D=3, leaf_size=40):
+def bench_trees(N=2000, D=3, leaf_size=40, metric='euclidean', **kwargs):
+    print "{N} points, metric = {metric}".format(N=N, metric=metric)
+
     X = np.random.random((N, D))
 
     labels = ['skBallTree', 'BallTree', 'KDTree']
@@ -27,9 +29,14 @@ def bench_trees(N=2000, D=3, leaf_size=40):
                                           ('', 'Build',
                                            'KNN', 'RNN', 'KDE', '2PT')))
     for tree_type, label in zip(tree_types, labels):
-        tree = tree_type(X, leaf_size=leaf_size)
-
-        construct_time = time_func(tree_type, X, leaf_size=leaf_size)
+        if label == 'skBallTree':
+            tree = tree_type(X, leaf_size=leaf_size)
+            construct_time = time_func(tree_type, X, leaf_size=leaf_size)
+        else:
+            tree = tree_type(X, leaf_size=leaf_size,
+                             metric=metric, **kwargs)
+            construct_time = time_func(tree_type, X, leaf_size=leaf_size,
+                                       metric=metric, **kwargs)
         knn_time = time_func(tree.query, X, k=3)
         rnn_time = time_func(tree.query_radius, X, r=0.1)
 
@@ -51,6 +58,9 @@ def bench_trees(N=2000, D=3, leaf_size=40):
                                              '%.2g' % construct_time,
                                              '%.2g' % knn_time,
                                              '%.2g' % rnn_time)))
+    print
+
 
 if __name__ == '__main__':
-    bench_trees(2000)
+    bench_trees(1000, metric='euclidean')
+    bench_trees(1000, metric='minkowski', p=3)
