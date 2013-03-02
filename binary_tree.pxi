@@ -1,9 +1,11 @@
 #!python
 
-# Binary Tree
-# Author: Jake Vanderplas <jakevdp@cs.washington.edu>
-# License: BSD
-
+# KD Tree and Ball Tree
+# =====================
+#
+#    Author: Jake Vanderplas <jakevdp@cs.washington.edu>, 2012-2013
+#    License: BSD
+#
 # This file is meant to be a literal include in a pyx file.
 # See ball_tree.pyx and kd_tree.pyx
 #
@@ -18,6 +20,72 @@
 # between a node and a point, and between two nodes.  These functions are
 # used here, and are all that are needed to differentiate between the two
 # tree types.
+#
+# Description of Binary Tree Algorithms
+# -------------------------------------
+# A binary tree can be thought of as a collection of nodes.  The top node
+# contains all the points.  The next level consists of two nodes with half
+# the points in each, and this continues recursively.  Each node contains
+# metadata which allow fast computation of distance bounds: in the case of
+# a ball tree, the metadata is a center and a radius.  In the case of a
+# KD tree, the metadata is the minimum and maximum bound along each dimension.
+#
+# In a typical KD Tree or Ball Tree implementation, the nodes are implemented
+# as dynamically allocated structures with pointers linking them.  Here we
+# take a different approach, storing all relevant data in a set of arrays
+# so that the entire tree object can be saved in a pickle file. For efficiency,
+# the data can be stored in such a way that explicit pointers are not
+# necessary: for node data stored at index i, the two child nodes are at
+# index (2 * i + 1) and (2 * i + 2); the parent node is (i - 1) // 2
+# (where // indicates integer division).
+#
+# The data arrays used here are as follows:
+#   data : the [n_samples x n_features] array of data from which the tree
+#          is built
+#   idx_array : the length n_samples array used to keep track of the indices
+#          of data within each node.  Each node has values idx_start and
+#          idx_end: the points within the node are given by (using numpy
+#          syntax) data[idx_array[idx_start:idx_end]].
+#   node_data : the length n_nodes array of structures which store the node
+#          indices, node radii, and leaf information for each node.
+#   node_bounds : the [* x n_nodes x n_features] array containing the node
+#          bound information.  For ball tree, the first dimension is 1, and
+#          each row contains the centroid of the node.  For kd tree, the first
+#          dimension is 2 and the rows for each point contain the arrays of
+#          lower bounds and upper bounds in each direction.
+#
+# The lack of dynamic allocation means the number of nodes must be computed
+# before the building of the tree. This can be done assuming the points are
+# divided equally between child nodes at each step; although this removes
+# some flexibility in tree creation, it ensures a balanced tree and ensures
+# that the number of nodes required can be computed beforehand.  Given a
+# specified leaf_size (the minimum number of points in any node), it is
+# possible to show that a balanced tree will have
+#
+#     n_levels = 1 + max(0, floor(log2((n_samples - 1) / leaf_size)))
+#
+# in order to satisfy
+#
+#     leaf_size <= min(n_points) <= 2 * leaf_size
+#
+# with the exception of the special case where n_samples < leaf_size.
+# for a given number of levels, the number of nodes in the tree is given by
+#
+#     n_nodes = 2 ** n_levels - 1
+#
+# both these results can be straightforwardly shown by induction.  The
+# following code uses these values in the construction of the tree.
+#
+# Distance Metrics
+# ----------------
+# For flexibility, the trees can be built using a variety of distance metrics.
+# The metrics are described in the DistanceMetric class: the standard
+# Euclidean distance is the default, and is inlined to be faster than other
+# metrics.  In addition, each metric defines both a distance and a
+# "reduced distance", which is often faster to compute, and is therefore
+# used in the query architecture whenever possible. (For example, in the
+# case of the standard Euclidean distance, the reduced distance is the
+# squared-distance).
 
 cimport cython
 cimport numpy as np
@@ -27,10 +95,8 @@ import numpy as np
 import warnings
 
 ######################################################################
-# Define doc strings.
-#  We define them here so we can substitute relevant pieces within
-#  BallTree and KDTree.  pyx files which include this file should
-#  define a DOC_DICT variable.
+# Define doc strings, substituting the appropriate class name using
+# the DOC_DICT variable defined in the pyx files.
 CLASS_DOC = \
 """{BinaryTree} for fast generalized N-point problems
 
@@ -48,7 +114,7 @@ leaf_size : positive integer (default = 20)
     Number of points at which to switch to brute-force. Changing
     leaf_size will not affect the results of a query, but can
     significantly impact the speed of a query and the memory required
-    to store the built ball tree.  The amount of memory needed to
+    to store the constructed tree.  The amount of memory needed to
     store the tree scales as approximately n_samples / leaf_size.
     For a specified ``leaf_size``, a leaf node is guaranteed to
     satisfy ``leaf_size <= n_points <= 2 * leaf_size``, except in
@@ -79,22 +145,44 @@ Query for k-nearest neighbors
     >>> print dist  # distances to 3 closest neighbors
     [ 0.          0.19662693  0.29473397]
 
-Pickle and Unpickle a ball tree (using protocol = 2).  Note that the
-state of the tree is saved in the pickle operation: the tree is not
-rebuilt on un-pickling
+Pickle and Unpickle a tree.  Note that the state of the tree is saved in the
+pickle operation: the tree needs not be rebuilt upon unpickling.
 
     >>> import numpy as np
     >>> import pickle
     >>> np.random.seed(0)
     >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
     >>> tree = {BinaryTree}(X, leaf_size=2)        # doctest: +SKIP
-    >>> s = pickle.dumps(tree, protocol=2)         # doctest: +SKIP
+    >>> s = pickle.dumps(tree)                     # doctest: +SKIP
     >>> tree_copy = pickle.loads(s)                # doctest: +SKIP
     >>> dist, ind = tree_copy.query(X[0], k=3)     # doctest: +SKIP
     >>> print ind  # indices of 3 closest neighbors   
     [0 3 1]
     >>> print dist  # distances to 3 closest neighbors
     [ 0.          0.19662693  0.29473397]
+
+Query for neighbors within a given radius
+
+    >>> import numpy as np
+    >>> np.random.seed(0)
+    >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
+    >>> tree = BinaryTree(X, leaf_size=2)     # doctest: +SKIP
+    >>> print tree.query_radius(X[0], r=0.3, count_only=True)
+    3
+    >>> ind = tree.query_radius(X[0], r=0.3)  # doctest: +SKIP
+    >>> print ind  # indices of neighbors within distance 0.3
+    [3 0 1]
+
+
+Compute a gaussian kernel density estimate:
+
+    >>> import numpy as np
+    >>> np.random.seed(1)
+    >>> X = np.random.random((100, 3))
+    >>> tree = BinaryTree(X)                  # doctest: +SKIP
+    >>> tree.kernel_density(X[:3], h=0.1, kernel='gaussian')
+    array([ 6.94114649,  7.83281226,  7.2071716 ])
+
 """.format(**DOC_DICT)
 
 
@@ -252,9 +340,6 @@ cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
 
 ######################################################################
 # Distance Metric Classes
-
-#------------------------------------------------------------
-# DistanceMetric base class
 cdef class DistanceMetric:
     """DistanceMetric class
 
@@ -326,10 +411,10 @@ cdef class DistanceMetric:
     "sokalsneath"     SokalSneathDistance     NNEQ / (NNEQ + 0.5 * NTT)
     ================  ======================  =================================
     """
-    # these attributes are required for subclasses.
+    # The following attributes are required for a few of the subclasses.
     # we must define them here so that cython's limited polymorphism will work.
-    # because we don't expect to instantiate a lot of these objects, the
-    # memory overhead of this setup should not be an issue.
+    # Because we don't expect to instantiate a lot of these objects, the
+    # extra memory overhead of this setup should not be an issue.
     cdef DTYPE_t p
     cdef DTYPE_t[::1] vec
     cdef DTYPE_t[:, ::1] mat
@@ -1245,7 +1330,7 @@ cdef void partition_indices(DTYPE_t* data,
             right = midindex - 1
 
 ######################################################################
-# NodeHeap : max heap used to keep track of nodes during
+# NodeHeap : min-heap used to keep track of nodes during
 #            breadth-first query
 
 cdef struct NodeHeapData_t:
@@ -1272,8 +1357,7 @@ cdef class NodeHeap:
     during a breadth-first search.
 
     The heap is an array which is maintained so that the min heap condition
-    is met:
-       heap[i].val < min(heap[2 * i + 1].val, heap[2 * i + 2].val)
+    is met:  heap[i].val < min(heap[2 * i + 1].val, heap[2 * i + 2].val)
     """
     cdef NodeHeapData_t[::1] data
     cdef ITYPE_t n
@@ -1415,8 +1499,8 @@ cdef class BinaryTree:
     cdef int n_splits
     cdef int n_calls
 
-    # Use cinit to initialize all arrays to empty: this prevents errors
-    # in rare cases where __init__ is not called
+    # Use cinit to initialize all arrays to empty: this will prevent memory
+    # errors and seg-faults in rare cases where __init__ is not called
     def __cinit__(self):
         self.data = np.empty((0, 1), dtype=DTYPE, order='C')
         self.idx_array = np.empty(0, dtype=ITYPE, order='C')
@@ -1426,11 +1510,13 @@ cdef class BinaryTree:
         self.leaf_size = 0
         self.n_levels = 0
         self.n_nodes = 0
+
+        self.euclidean = False
+
         self.n_trims = 0
         self.n_leaves = 0
         self.n_splits = 0
         self.n_calls = 0
-        self.euclidean = False
 
     def __init__(self, DTYPE_t[:, ::1] data,
                  leaf_size=40, metric='euclidean', **kwargs):
@@ -1466,7 +1552,7 @@ cdef class BinaryTree:
         self.idx_array = np.arange(n_samples, dtype=ITYPE)
         self.node_data = np.zeros(self.n_nodes, dtype=NodeData)
 
-        # Allocate tree-specific data from TreeBase
+        # Allocate tree-specific data
         allocate_data(self, self.n_nodes, n_features)        
         self._recursive_build(0, 0, n_samples)
 
@@ -1586,48 +1672,59 @@ cdef class BinaryTree:
     def query(self, X, k=1, return_distance=True,
               dualtree=False, breadth_first=False):
         """
-        query(X, k=1, return_distance=True)
+        query(X, k=1, return_distance=True,
+              dualtree=False, breadth_first=False)
 
-        query the tree for the k nearest neighbors
+        query the treeree for the k nearest neighbors
 
         Parameters
         ----------
-        X : array-like, last dimension same as that of self.data
+        X : array-like, last dimension self.dim
             An array of points to query
         k : integer  (default = 1)
             The number of nearest neighbors to return
         return_distance : boolean (default = True)
-            if True, return a tuple (d,i)
+            if True, return a tuple (d, i) of distances and indices
             if False, return array i
+        dualtree : boolean (default = False)
+            if True, use the dual tree formalism for the query: a tree is
+            built for the query points, and the pair of trees is used to
+            efficiently search this space.  This can lead to better
+            performance as the number of points grows large.
+        breadth_first : boolean (default = False)
+            if True, then query the nodes in a breadth-first manner.
+            Otherwise, query the nodes in a depth-first manner.
 
         Returns
         -------
         i    : if return_distance == False
-        (d, i) : if return_distance == True
+        (d,i) : if return_distance == True
 
         d : array of doubles - shape: x.shape[:-1] + (k,)
-            each entry gives the sorted list of distances to the
+            each entry gives the list of distances to the
             neighbors of the corresponding point
+            (note that distances are not sorted)
 
         i : array of integers - shape: x.shape[:-1] + (k,)
-            each entry gives the sorted list of indices of
+            each entry gives the list of indices of
             neighbors of the corresponding point
+            (note that neighbors are not sorted)
 
         Examples
         --------
         Query for k-nearest neighbors
 
-            # >>> import numpy as np
-            # >>> np.random.seed(0)
-            # >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
-            # >>> tree = BinaryTree(X, leaf_size=2)
-            # >>> dist, ind = tree.query(X, 3)
-            # >>> print ind  # indices of 3 closest neighbors
-            # [0 3 1]
-            # >>> print dist  # distances to 3 closest neighbors
-            # [ 0.          0.19662693  0.29473397]
+            >>> import numpy as np
+            >>> np.random.seed(0)
+            >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
+            >>> tree = BinaryTree(X, leaf_size=2)    # doctest: +SKIP
+            >>> dist, ind = tree.query(X[0], k=3)    # doctest: +SKIP
+            >>> print ind  # indices of 3 closest neighbors
+            [0 3 1]
+            >>> print dist  # distances to 3 closest neighbors
+            [ 0.          0.19662693  0.29473397]
         """
-        # XXX: if dualtree, allow X to be a pre-built tree.
+        # XXX: we should allow X to be a pre-built tree.
         X = np.atleast_1d(np.asarray(X, dtype=DTYPE, order='C'))
 
         if X.shape[-1] != self.data.shape[1]:
@@ -1696,24 +1793,22 @@ cdef class BinaryTree:
     def query_radius(self, X, r, return_distance=False,
                      int count_only=False, int sort_results=False):
         """
-        query_radius(self, X, r, return_distance=False,
-                     count_only = False, sort_results=False):
+        query_radius(self, X, r, count_only = False):
 
-        query the tree for neighbors within a ball of size r
+        query the tree for neighbors within a radius r
 
         Parameters
         ----------
-        X : array-like
-            An array of points to query.  Last dimension should match dimension
-            of training data.
+        X : array-like, last dimension self.dim
+            An array of points to query
         r : distance within which neighbors are returned
             r can be a single value, or an array of values of shape
             x.shape[:-1] if different radii are desired for each point.
         return_distance : boolean (default = False)
             if True,  return distances to neighbors of each point
             if False, return only neighbors
-            Note that unlike query(), setting return_distance=True
-            adds to the computation time.  Not all distances need to be
+            Note that unlike the query() method, setting return_distance=True
+            here adds to the computation time.  Not all distances need to be
             calculated explicitly for return_distance=False.  Results are
             not sorted by default: see ``sort_results`` keyword.
         count_only : boolean (default = False)
@@ -1740,7 +1835,7 @@ cdef class BinaryTree:
         ind : array of objects, shape = X.shape[:-1]
             each element is a numpy integer array listing the indices of
             neighbors of the corresponding point.  Note that unlike
-            the results of query(), the returned neighbors
+            the results of a k-neighbors query, the returned neighbors
             are not sorted by distance
 
         dist : array of objects, shape = X.shape[:-1]
@@ -1751,15 +1846,15 @@ cdef class BinaryTree:
         --------
         Query for neighbors in a given radius
 
-        # >>> import numpy as np
-        # >>> np.random.seed(0)
-        # >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
-        # >>> ball_tree = {BinaryTree}(X, leaf_size=2)
-        # >>> print ball_tree.query_radius(X[0], r=0.3, count_only=True)
-        # 3
-        # >>> ind = ball_tree.query_radius(X[0], r=0.3)
-        # >>> print ind  # indices of neighbors within distance 0.3
-        # [3 0 1]
+        >>> import numpy as np
+        >>> np.random.seed(0)
+        >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
+        >>> tree = BinaryTree(X, leaf_size=2)     # doctest: +SKIP
+        >>> print tree.query_radius(X[0], r=0.3, count_only=True)
+        3
+        >>> ind = tree.query_radius(X[0], r=0.3)  # doctest: +SKIP
+        >>> print ind  # indices of neighbors within distance 0.3
+        [3 0 1]
         """
         if count_only and return_distance:
             raise ValueError("count_only and return_distance "
@@ -1863,20 +1958,35 @@ cdef class BinaryTree:
             - 'linear'
             - 'cosine'
             Default is kernel = 'gaussian'
-        atol, rtol : float
+        atol, rtol : float (default = 0)
             Specify the desired relative and absolute tolerance of the result.
             If the true result is K_true, then the returned result K_ret
-            satisfies
-                abs(K_true - K_ret) < atol + rtol * K_ret
-            Default is zero (i.e. machine precision) for both.
-            Note that for dualtree=True, rtol must be zero.
-        dualtree : boolean
+            satisfies ``abs(K_true - K_ret) < atol + rtol * K_ret``
+            The default is zero (i.e. machine precision) for both.
+            Note that for dualtree=True, rtol must be set to zero.
+        dualtree : boolean  (default = False)
             if True, use the dual tree formalism.  This can be faster for
-            large N.  Default is False
-        breadth_first : boolean
+            large N, but can only be used for rtol = 0
+        breadth_first : boolean (default = False)
             if True, use a breadth-first search.  If False (default) use a
             depth-first search.  Breadth-first is generally faster for
             compact kernels and/or high tolerances.
+
+        Returns
+        -------
+        density : ndarray
+            The array of density evaluations.  This has shape X.shape[:-1]
+
+        Examples
+        --------
+        Compute a gaussian kernel density estimate:
+
+        >>> import numpy as np
+        >>> np.random.seed(1)
+        >>> X = np.random.random((100, 3))
+        >>> tree = BinaryTree(X)
+        >>> tree.kernel_density(X[:3], h=0.1, kernel='gaussian')
+        array([ 6.94114649,  7.83281226,  7.2071716 ])
         """
         cdef DTYPE_t h_c = h
         cdef DTYPE_t atol_c = atol
