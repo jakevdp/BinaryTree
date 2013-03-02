@@ -1,13 +1,4 @@
-3) Change lower_bounds/upper_bounds and centroids to a single 3-dim
-   array variable, node_geometry, which can be used in both.
-
-4) implement BallTree/KDTree using a pxi file to remove code duplication.
-   -- OR --  Is it possible to use an inheritance structure?  Check if
-   this changes the benchmarks.
-
-5) figure out how to update doc strings for KDTree/BallTree
-
-6) factor distance metrics to a new file & document
+6) factor distance metrics to a new file
 
 7) Document the module.
 

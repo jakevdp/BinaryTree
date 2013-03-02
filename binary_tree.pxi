@@ -15,7 +15,71 @@ import warnings
 #  We define them here so we can substitute relevant pieces within
 #  BallTree and KDTree.  pyx files which include this file should
 #  define a DOC_DICT variable.
-CLASS_DOC = """{BinaryTree} class""".format(**DOC_DICT)
+CLASS_DOC = \
+"""{BinaryTree} for fast generalized N-point problems
+
+{BinaryTree}(X, leaf_size=40, metric='euclidean', **kwargs)
+
+Parameters
+----------
+X : array-like, shape = [n_samples, n_features]
+    n_samples is the number of points in the data set, and
+    n_features is the dimension of the parameter space.
+    Note: if X is a C-contiguous array of doubles then data will
+    not be copied. Otherwise, an internal copy will be made.
+
+leaf_size : positive integer (default = 20)
+    Number of points at which to switch to brute-force. Changing
+    leaf_size will not affect the results of a query, but can
+    significantly impact the speed of a query and the memory required
+    to store the built ball tree.  The amount of memory needed to
+    store the tree scales as approximately n_samples / leaf_size.
+    For a specified ``leaf_size``, a leaf node is guaranteed to
+    satisfy ``leaf_size <= n_points <= 2 * leaf_size``, except in
+    the case that ``n_samples < leaf_size``.
+
+metric : string or DistanceMetric object
+    the distance metric to use for the tree.  Default='euclidean'.
+    See the documentation of the DistanceMetric class for details.
+    Additional keywords are passed to the distance metric class.
+
+Attributes
+----------
+data : np.ndarray
+    The training data
+
+Examples
+--------
+Query for k-nearest neighbors
+
+    >>> import numpy as np
+
+    >>> np.random.seed(0)
+    >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
+    >>> tree = {BinaryTree}(X, leaf_size=2)              # doctest: +SKIP
+    >>> dist, ind = tree.query(X[0], k=3)                # doctest: +SKIP
+    >>> print ind  # indices of 3 closest neighbors
+    [0 3 1]
+    >>> print dist  # distances to 3 closest neighbors
+    [ 0.          0.19662693  0.29473397]
+
+Pickle and Unpickle a ball tree (using protocol = 2).  Note that the
+state of the tree is saved in the pickle operation: the tree is not
+rebuilt on un-pickling
+
+    >>> import numpy as np
+    >>> import pickle
+    >>> np.random.seed(0)
+    >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
+    >>> tree = {BinaryTree}(X, leaf_size=2)        # doctest: +SKIP
+    >>> s = pickle.dumps(tree, protocol=2)         # doctest: +SKIP
+    >>> tree_copy = pickle.loads(s)                # doctest: +SKIP
+    >>> dist, ind = tree_copy.query(X[0], k=3)     # doctest: +SKIP
+    >>> print ind  # indices of 3 closest neighbors   
+    [0 3 1]
+    >>> print dist  # distances to 3 closest neighbors
+    [ 0.          0.19662693  0.29473397]
+""".format(**DOC_DICT)
 
 
 ######################################################################
@@ -46,6 +110,7 @@ DTYPE = np.asarray(ddummy_view).dtype
 cdef DTYPE_t INF = np.inf
 cdef DTYPE_t PI = np.pi
 cdef DTYPE_t ROOT_2PI = sqrt(2 * PI)
+
 
 ######################################################################
 # Kernel functions
@@ -175,6 +240,76 @@ cdef DTYPE_t[:, ::1] euclidean_cdist(DTYPE_t[:, ::1] X, DTYPE_t[:, ::1] Y):
 #------------------------------------------------------------
 # DistanceMetric base class
 cdef class DistanceMetric:
+    """DistanceMetric class
+
+    This class provides a uniform interface to fast distance metric
+    functions.  The various metrics can be accessed via the `get_metric`
+    class method and the metric string identifier (see below).
+    For example, to use the Euclidean distance:
+
+    >>> dist = DistanceMetric.get_metric('euclidean')
+    >>> X = [[0, 1, 2],
+             [3, 4, 5]])
+    >>> dist.pairwise(X)
+    array([[ 0.        ,  5.19615242],
+           [ 5.19615242,  0.        ]])
+
+    Available Metrics
+    -----------------
+    The following lists the string metric identifiers and the associated
+    distance metric classes:
+
+    *Metrics intended for real-valued vector spaces:*
+
+    ==============  ====================  ========  ===========================
+    identifier      class name            args      distance function
+    --------------  --------------------  --------  ---------------------------
+    "euclidean"     EuclideanDistance     -         sqrt(sum((x - y)^2))
+    "manhattan"     ManhattanDistance     -         sum(|x - y|)
+    "chebyshev"     ChebyshevDistance     -         sum(max(|x - y|))
+    "minkowski"     MinkowskiDistance     p         sum(|x - y|^p)^(1/p)
+    "wminkowski"    WMinkowskiDistance    p, w      sum(w * |x - y|^p)^(1/p)
+    "seuclidean"    SEuclideanDistance    V         sqrt(sum((x - y)^2 / V))
+    "mahalanobis"   MahalanobisDistance   V or VI   sqrt((x - y)' V^-1 (x - y))
+    ==============  ====================  ========  ===========================
+
+    *Metrics intended for integer-valued vector spaces:*  Though intended
+    for integer-valued vectors, these are also valid metrics in the case of
+    real-valued vectors.
+
+    =============  ====================  ====================================
+    identifier     class name            distance function
+    -------------  --------------------  ------------------------------------
+    "hamming"      HammingDistance       N_unequal(x, y) / N_tot
+    "canberra"     CanberraDistance      sum(|x - y| / (|x| + |y|))
+    "braycurtis"   BrayCurtisDistance    sum(|x - y|) / (sum(|x|) + sum(|y|))
+    =============  ====================  ====================================
+
+    *Metrics intended for boolean-valued vector spaces:*  Any nonzero entry
+    is evaluated to "True".  In the listings below, the following
+    abbreviations are used:
+
+     - N  : number of dimensions
+     - NTT : number of dims in which both values are True
+     - NTF : number of dims in which the first value is True, second is False
+     - NFT : number of dims in which the first value is False, second is True
+     - NFF : number of dims in which both values are False
+     - NNEQ : number of non-equal dimensions, NNEQ = NTF + NFT
+     - NNZ : number of nonzero dimensions, NNZ = NTF + NFT + NTT
+
+    =============     ======================  =================================
+    identifier        class name              distance function
+    -------------     ----------------------  ---------------------------------
+    "jaccard"         JaccardDistance         NNEQ / NNZ
+    "maching"         MatchingDistance        NNEQ / N
+    "dice"            DiceDistance            NNEQ / (NTT + NNZ)
+    "kulsinski"       KulsinskiDistance       (NNEQ + N - NTT) / (NNEQ + N)
+    "rogerstanimoto"  RogerStanimotoDistance  2 * NNEQ / (N + NNEQ)
+    "russellrao"      RussellRaoDistance      NNZ / N
+    "sokalmichener"   SokalMichenerDistance   2 * NNEQ / (N + NNEQ)
+    "sokalsneath"     SokalSneathDistance     NNEQ / (NNEQ + 0.5 * NTT)
+    ================  ======================  =================================
+    """
     # these attributes are required for subclasses.
     # we must define them here so that cython's limited polymorphism will work.
     # because we don't expect to instantiate a lot of these objects, the
@@ -221,12 +356,33 @@ cdef class DistanceMetric:
 
     @classmethod
     def get_metric(cls, metric, **kwargs):
+        """Get the given distance metric from the string identifier.
+
+        See the docstring of DistanceMetric for a list of available metrics.
+
+        Parameters
+        ----------
+        metric : string or class name
+            The distance metric to use
+        **kwargs
+            additional arguments will be passed to the requested metric
+        """
         if isinstance(metric, DistanceMetric):
             return metric
         elif isinstance(metric, type) and issubclass(metric, DistanceMetric):
             return metric(**kwargs)
         elif metric in [None, 'euclidean', 'l2']:
             return EuclideanDistance()
+        elif metric in ['minkowski', 'p']:
+            p = kwargs.get('p', 2)
+            if p == 1:
+                return ManhattanDistance()
+            if p == 2:
+                return EuclideanDistance()
+            elif np.isinf(p):
+                return ChebyshevDistance()
+            else:
+                return MinkowskiDistance(p)
         elif metric in ['manhattan', 'cityblock', 'l1']:
             return ManhattanDistance()
         elif metric in ['chebyshev', 'infinity']:
@@ -243,14 +399,6 @@ cdef class DistanceMetric:
             return CanberraDistance(**kwargs)
         elif metric == 'braycurtis':
             return BrayCurtisDistance(**kwargs)
-        elif metric in ['minkowski', 'p']:
-            p = kwargs.get('p', 2)
-            if p == 1:
-                return ManhattanDistance()
-            if p == 2:
-                return EuclideanDistance()
-            else:
-                return MinkowskiDistance(p)
         elif metric == 'matching':
             return MatchingDistance()
         elif metric == 'hamming':
@@ -331,6 +479,11 @@ cdef class DistanceMetric:
 # Euclidean Distance
 #  d = sqrt(sum(x_i^2 - y_i^2))
 cdef class EuclideanDistance(DistanceMetric):
+    """Euclidean Distance metric
+
+    .. math::
+       D(x, y) = \sqrt{ \sum_i (x_i - y_i) ^ 2 }
+    """
     def __init__(self):
         self.p = 2
 
@@ -355,8 +508,13 @@ cdef class EuclideanDistance(DistanceMetric):
 
 #------------------------------------------------------------
 # SEuclidean Distance
-#  d = sqrt(sum((x_i^2 - y_i^2) / v_i))
+#  d = sqrt(sum((x_i - y_i2)^2 / v_i))
 cdef class SEuclideanDistance(DistanceMetric):
+    """Standardized Euclidean Distance metric
+
+    .. math::
+       D(x, y) = \sqrt{ \sum_i \frac{ (x_i - y_i) ^ 2}{V_i} }
+    """
     def __init__(self, V):
         self.vec = np.asarray(V, dtype=DTYPE)
         self.size = self.vec.shape[0]
@@ -390,8 +548,13 @@ cdef class SEuclideanDistance(DistanceMetric):
 
 #------------------------------------------------------------
 # Manhattan Distance
-#  d = sum(abs(x_i) - abs(y_i))
+#  d = sum(abs(x_i - y_i))
 cdef class ManhattanDistance(DistanceMetric):
+    """Manhattan/City-block Distance metric
+
+    .. math::
+       D(x, y) = \sum_i |x_i - y_i|
+    """
     def __init__(self):
         self.p = 1
 
@@ -404,8 +567,13 @@ cdef class ManhattanDistance(DistanceMetric):
 
 #------------------------------------------------------------
 # Chebyshev Distance
-#  d = max_i(abs(x_i) - abs(y_i))
+#  d = max_i(abs(x_i), abs(y_i))
 cdef class ChebyshevDistance(DistanceMetric):
+    """Chebyshev/Infinity Distance
+
+    .. math::
+       D(x, y) = max_i (|x_i - y_i|)
+    """
     def __init__(self):
         self.p = INF
 
@@ -420,7 +588,22 @@ cdef class ChebyshevDistance(DistanceMetric):
 # Minkowski Distance
 #  d = sum(x_i^p - y_i^p) ^ (1/p)
 cdef class MinkowskiDistance(DistanceMetric):
+    """Minkowski Distance
+
+    .. math::
+       D(x, y) = [\sum_i (x_i - y_i)^p] ^ (1/p)
+
+    Minkowski Distance requires p >= 1 and finite. For p = infinity,
+    use ChebyshevDistance.
+    Note that for p=1, ManhattanDistance is more efficient, and for
+    p=2, EuclideanDistance is more efficient.
+    """
     def __init__(self, p):
+        if p < 1:
+            raise ValueError("p must be greater than 1")
+        elif np.isinf(p):
+            raise ValueError("MinkowskiDistance requires finite p. "
+                             "For p=inf, use ChebyshevDistance.")
         self.p = p
 
     cdef inline DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
@@ -449,11 +632,23 @@ cdef class MinkowskiDistance(DistanceMetric):
 # W-Minkowski Distance
 #  d = sum(w_i * (x_i^p - y_i^p)) ^ (1/p)
 cdef class WMinkowskiDistance(DistanceMetric):
+    """Weighted Minkowski Distance
+
+    .. math::
+       D(x, y) = [\sum_i (x_i - y_i)^p] ^ (1/p)
+
+    Weighted Minkowski Distance requires p >= 1 and finite. 
+    """
     def __init__(self, p, w):
+        if p < 1:
+            raise ValueError("p must be greater than 1")
+        elif np.isinf(p):
+            raise ValueError("MinkowskiDistance requires finite p. "
+                             "For p=inf, use ChebyshevDistance.")
+        self.p = p
         self.vec = np.asarray(w, dtype=DTYPE)
         self.size = self.vec.shape[0]
         self.vec_ptr = &self.vec[0]
-        self.p = p
 
     cdef inline DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         if size != self.size:
@@ -483,6 +678,20 @@ cdef class WMinkowskiDistance(DistanceMetric):
 # Mahalanobis Distance
 #  d = sqrt( (x - y)^T V^-1 (x - y) )
 cdef class MahalanobisDistance(DistanceMetric):
+    """Mahalanobis Distance
+
+    .. math::
+       D(x, y) = \sqrt{ (x - y)^T V^{-1} (x - y) }
+
+    Parameters
+    ----------
+    V : array_like
+        Symmetric positive-definite covariance matrix.
+        The inverse of this matrix will be explicitly computed.
+    VI : array_like
+        optionally specify the inverse directly.  If VI is passed,
+        then V is not referenced.
+    """
     def __init__(self, V=None, VI=None):
         if VI is None:
             VI = np.linalg.inv(V)
@@ -531,8 +740,16 @@ cdef class MahalanobisDistance(DistanceMetric):
 
 #------------------------------------------------------------
 # Hamming Distance
-#  d = N_unequal(x, y) / N_totcdef
+#  d = N_unequal(x, y) / N_tot
 cdef class HammingDistance(DistanceMetric):
+    """Hamming Distance
+
+    Hamming distance is meant for discrete-valued vectors, though it is
+    a valid metric for real-valued vectors.
+
+    .. math::
+       D(x, y) = \frac{1}{N} \sum_i \delta_{x_i, y_i}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef int n_unequal = 0
         for j in range(size):
@@ -545,6 +762,14 @@ cdef class HammingDistance(DistanceMetric):
 # Canberra Distance
 #  D(x, y) = sum[ abs(x_i - y_i) / (abs(x_i) + abs(y_i)) ]
 cdef class CanberraDistance(DistanceMetric):
+    """Canberra Distance
+
+    Canberra distance is meant for discrete-valued vectors, though it is
+    a valid metric for real-valued vectors.
+
+    .. math::
+       D(x, y) = \sum_i \frac{|x_i - y_i|}{|x_i| + |y_i|}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef DTYPE_t denom, d = 0
         for j in range(size):
@@ -558,6 +783,14 @@ cdef class CanberraDistance(DistanceMetric):
 # Bray-Curtis Distance
 #  D(x, y) = sum[abs(x_i - y_i)] / sum[abs(x_i) + abs(y_i)]
 cdef class BrayCurtisDistance(DistanceMetric):
+    """Bray-Curtis Distance
+
+    Bray-Curtis distance is meant for discrete-valued vectors, though it is
+    a valid metric for real-valued vectors.
+
+    .. math::
+       D(x, y) = \frac{\sum_i |x_i - y_i|}{\sum_i(|x_i| + |y_i|)}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef DTYPE_t num = 0, denom = 0
         for j in range(size):
@@ -573,6 +806,15 @@ cdef class BrayCurtisDistance(DistanceMetric):
 # Jaccard Distance (boolean)
 #  D(x, y) = N_unequal(x, y) / N_nonzero(x, y)
 cdef class JaccardDistance(DistanceMetric):
+    """Jaccard Distance
+
+    Jaccard Distance is a dissimilarity measure for boolean-valued
+    vectors. All nonzero entries will be treated as True, zero entries will
+    be treated as False.
+
+    .. math::
+       D(x, y) = \frac{N_{TF} + N_{FT}}{N_{TT} + N_{TF} + N_{FT}}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef int tf1, tf2, n_eq = 0, nnz = 0
         for j in range(size):
@@ -587,6 +829,15 @@ cdef class JaccardDistance(DistanceMetric):
 # Matching Distance (boolean)
 #  D(x, y) = n_neq / n
 cdef class MatchingDistance(DistanceMetric):
+    """Matching Distance
+
+    Matching Distance is a dissimilarity measure for boolean-valued
+    vectors. All nonzero entries will be treated as True, zero entries will
+    be treated as False.
+
+    .. math::
+       D(x, y) = \frac{N_{TF} + N_{FT}}{N}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef int tf1, tf2, n_neq = 0
         for j in range(size):
@@ -600,6 +851,15 @@ cdef class MatchingDistance(DistanceMetric):
 # Dice Distance (boolean)
 #  D(x, y) = n_neq / (2 * ntt + n_neq)
 cdef class DiceDistance(DistanceMetric):
+    """Dice Distance
+
+    Dice Distance is a dissimilarity measure for boolean-valued
+    vectors. All nonzero entries will be treated as True, zero entries will
+    be treated as False.
+
+    .. math::
+       D(x, y) = \frac{N_{TF} + N_{FT}}{2 * N_{TT} + N_{TF} + N_{FT}}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef int tf1, tf2, n_neq = 0, ntt = 0
         for j in range(size):
@@ -614,6 +874,15 @@ cdef class DiceDistance(DistanceMetric):
 # Kulsinski Distance (boolean)
 #  D(x, y) = (ntf + nft - ntt + n) / (n_neq + n)
 cdef class KulsinskiDistance(DistanceMetric):
+    """Kulsinski Distance
+
+    Kulsinski Distance is a dissimilarity measure for boolean-valued
+    vectors. All nonzero entries will be treated as True, zero entries will
+    be treated as False.
+
+    .. math::
+       D(x, y) = 1 - \frac{N_{TT}}{N + N_{TF} + N_{FT}}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef int tf1, tf2, ntt = 0, n_neq = 0
         for j in range(size):
@@ -628,6 +897,15 @@ cdef class KulsinskiDistance(DistanceMetric):
 # Roger-Stanimoto Distance (boolean)
 #  D(x, y) = 2 * n_neq / (n + n_neq)
 cdef class RogerStanimotoDistance(DistanceMetric):
+    """Roger-Stanimoto Distance
+
+    Roger-Stanimoto Distance is a dissimilarity measure for boolean-valued
+    vectors. All nonzero entries will be treated as True, zero entries will
+    be treated as False.
+
+    .. math::
+       D(x, y) = \frac{2 (N_{TF} + N_{FT})}{N + N_{TF} + N_{FT}}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef int tf1, tf2, n_neq = 0
         for j in range(size):
@@ -641,6 +919,15 @@ cdef class RogerStanimotoDistance(DistanceMetric):
 # Russell-Rao Distance (boolean)
 #  D(x, y) = (n - ntt) / n
 cdef class RussellRaoDistance(DistanceMetric):
+    """Russell-Rao Distance
+
+    Russell-Rao Distance is a dissimilarity measure for boolean-valued
+    vectors. All nonzero entries will be treated as True, zero entries will
+    be treated as False.
+
+    .. math::
+       D(x, y) = \frac{N - N_{TT}}{N}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef int tf1, tf2, ntt = 0
         for j in range(size):
@@ -654,6 +941,15 @@ cdef class RussellRaoDistance(DistanceMetric):
 # Sokal-Michener Distance (boolean)
 #  D(x, y) = 2 * n_neq / (n + n_neq)
 cdef class SokalMichenerDistance(DistanceMetric):
+    """Sokal-Michener Distance
+
+    Sokal-Michener Distance is a dissimilarity measure for boolean-valued
+    vectors. All nonzero entries will be treated as True, zero entries will
+    be treated as False.
+
+    .. math::
+       D(x, y) = \frac{2 (N_{TF} + N_{FT})}{N + N_{TF} + N_{FT}}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef int tf1, tf2, n_neq = 0
         for j in range(size):
@@ -667,6 +963,15 @@ cdef class SokalMichenerDistance(DistanceMetric):
 # Sokal-Sneath Distance (boolean)
 #  D(x, y) = n_neq / (0.5 * n_tt + n_neq)
 cdef class SokalSneathDistance(DistanceMetric):
+    """Sokal-Sneath Distance
+
+    Sokal-Sneath Distance is a dissimilarity measure for boolean-valued
+    vectors. All nonzero entries will be treated as True, zero entries will
+    be treated as False.
+
+    .. math::
+       D(x, y) = \frac{N_{TF} + N_{FT}}{N_{TT} / 2 + N_{TF} + N_{FT}}
+    """
     cdef inline DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2, ITYPE_t size):
         cdef int tf1, tf2, ntt = 0, n_neq = 0
         for j in range(size):
@@ -1098,7 +1403,7 @@ cdef class BinaryTree:
         self.data = np.empty((0, 1), dtype=DTYPE, order='C')
         self.idx_array = np.empty(0, dtype=ITYPE, order='C')
         self.node_data = np.empty(0, dtype=NodeData, order='C')
-        self.node_bounds = np.empty((0, 0, 1), dtype=DTYPE)
+        self.node_bounds = np.empty((0, 1, 1), dtype=DTYPE)
 
         self.leaf_size = 0
         self.n_levels = 0
@@ -1110,7 +1415,7 @@ cdef class BinaryTree:
         self.euclidean = False
 
     def __init__(self, DTYPE_t[:, ::1] data,
-                 leaf_size=20, metric='euclidean', **kwargs):
+                 leaf_size=40, metric='euclidean', **kwargs):
         self.data = data
         self.leaf_size = leaf_size
         self.dm = DistanceMetric.get_metric(metric, **kwargs)
