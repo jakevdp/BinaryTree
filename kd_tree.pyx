@@ -7,6 +7,8 @@ __all__ = ['KDTree']
 
 DOC_DICT = {'BinaryTree':'KDTree'}
 
+VALID_METRICS = ['EuclideanDistance', 'ManhattanDistance', 'MinkowskiDistance']
+
 include "binary_tree.pxi"
 
 KDTree = BinaryTree

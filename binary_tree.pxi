@@ -6,6 +6,18 @@
 
 # This file is meant to be a literal include in a pyx file.
 # See ball_tree.pyx and kd_tree.pyx
+#
+# The routines here are the core algorithms of the KDTree and BallTree
+# structures.  If Cython supported polymorphism, we would be able to
+# create a subclass and derive KDTree and BallTree from it.  Because
+# polymorphism is not an option, we use this single BinaryTree class
+# as a literal include to avoid duplicating the entire file.
+#
+# A series of functions are implemented in kd_tree.pyx and ball_tree.pyx
+# which use the information here to calculate the lower and upper bounds
+# between a node and a point, and between two nodes.  These functions are
+# used here, and are all that are needed to differentiate between the two
+# tree types.
 
 cimport cython
 cimport numpy as np
@@ -1383,6 +1395,8 @@ NodeData = np.asarray(dummy_view).dtype
 cdef class BinaryTree:
     __doc__ = CLASS_DOC
 
+    cdef object valid_metrics
+
     cdef readonly DTYPE_t[:, ::1] data
     cdef public ITYPE_t[::1] idx_array
     cdef public NodeData_t[::1] node_data
@@ -1420,10 +1434,17 @@ cdef class BinaryTree:
 
     def __init__(self, DTYPE_t[:, ::1] data,
                  leaf_size=40, metric='euclidean', **kwargs):
+        self.valid_metrics = VALID_METRICS
         self.data = data
         self.leaf_size = leaf_size
         self.dm = DistanceMetric.get_metric(metric, **kwargs)
         self.euclidean = (self.dm.__class__.__name__ == 'EuclideanDistance')
+
+        metric = self.dm.__class__.__name__
+        if metric not in self.valid_metrics:
+            raise ValueError('metric {metric} is not valid for '
+                             '{BinaryTree}'.format(metric=metric,
+                                                   **DOC_DICT))
 
         # validate data
         if self.data.size == 0:
@@ -1678,7 +1699,7 @@ cdef class BinaryTree:
         query_radius(self, X, r, return_distance=False,
                      count_only = False, sort_results=False):
 
-        query the Ball Tree for neighbors within a ball of size r
+        query the tree for neighbors within a ball of size r
 
         Parameters
         ----------
