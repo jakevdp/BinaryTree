@@ -64,6 +64,14 @@ cdef inline DTYPE_t max_dist(BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
                                      bt.data.shape[1])
     return dist_pt + bt.node_data[i_node].radius
 
+cdef inline void min_max_dist(BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt,
+                              DTYPE_t* min_dist, DTYPE_t* max_dist):
+    cdef DTYPE_t dist_pt = bt.dist(pt, &bt.node_bounds[0, i_node, 0],
+                                     bt.data.shape[1])
+    cdef DTYPE_t rad = bt.node_data[i_node].radius
+    min_dist[0] = fmax(0, dist_pt - rad)
+    max_dist[0] = dist_pt + rad
+
 cdef inline DTYPE_t min_rdist(BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
     if bt.euclidean:
         return euclidean_dist_to_rdist(min_dist(bt, i_node, pt))

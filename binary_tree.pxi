@@ -1,7 +1,11 @@
 #!python
-#cython: boundscheck=False
-#cython: wraparound=False
-#cython: cdivision=True
+
+# Binary Tree
+# Author: Jake Vanderplas <jakevdp@cs.washington.edu>
+# License: BSD
+
+# This file is meant to be a literal include in a pyx file.
+# See ball_tree.pyx and kd_tree.pyx
 
 cimport cython
 cimport numpy as np
@@ -1776,8 +1780,12 @@ cdef class BinaryTree:
             if return_distance:
                 distances = np.zeros(Xarr.shape[0], dtype='object')
 
-        idx_arr_i = np.zeros(self.data.shape[0], dtype=ITYPE)
-        dist_arr_i = np.zeros(self.data.shape[0], dtype=DTYPE)
+        np_idx_arr = np.zeros(self.data.shape[0], dtype=ITYPE)
+        idx_arr_i = np_idx_arr
+
+        np_dist_arr = np.zeros(self.data.shape[0], dtype=DTYPE)
+        dist_arr_i = np_dist_arr
+
         count_arr = np.zeros(Xarr.shape[0], dtype=ITYPE)
 
         pt = &Xarr[0, 0]
@@ -1796,11 +1804,9 @@ cdef class BinaryTree:
                     _simultaneous_sort(&dist_arr_i[0], &idx_arr_i[0],
                                        count_arr[i])
  
-                indices[i] = np.array(idx_arr_i[:count_arr[i]],
-                                      copy=True)
+                indices[i] = np_idx_arr[:count_arr[i]].copy()
                 if return_distance:
-                    distances[i] = np.array(dist_arr_i[:count_arr[i]],
-                                            copy=True)
+                    distances[i] = np_dist_arr[:count_arr[i]].copy()
 
         # deflatten results
         if count_only:
@@ -1854,7 +1860,7 @@ cdef class BinaryTree:
         cdef DTYPE_t h_c = h
         cdef DTYPE_t atol_c = atol
         cdef DTYPE_t rtol_c = rtol
-        cdef DTYPE_t min_bound, max_bound
+        cdef DTYPE_t min_bound, max_bound, dist_LB = 0, dist_UB = 0
 
         cdef ITYPE_t n_samples = self.data.shape[0]
         cdef ITYPE_t n_features = self.data.shape[1]
@@ -1923,12 +1929,11 @@ cdef class BinaryTree:
                     pt += n_features
             else:
                 for i in range(Xarr.shape[0]):
+                    min_max_dist(self, 0, pt, &dist_LB, &dist_UB)
                     # compute max & min bounds on density within top node
-                    min_bound = n_samples * compute_kernel(max_dist(self,
-                                                                    0, pt),
+                    min_bound = n_samples * compute_kernel(dist_UB,
                                                            h_c, kernel_c)
-                    max_bound = n_samples * compute_kernel(min_dist(self,
-                                                                    0, pt),
+                    max_bound = n_samples * compute_kernel(dist_LB,
                                                            h_c, kernel_c)
                     self._kde_one_depthfirst(0, pt, kernel_c, h_c,
                                              atol_c, rtol_c,
@@ -2289,10 +2294,8 @@ cdef class BinaryTree:
         cdef ITYPE_t i
         cdef DTYPE_t reduced_r
 
-        # XXX: for efficiency, calculate dist_LB and dist_UB at the same time
-        cdef DTYPE_t dist_pt, dist_LB, dist_UB
-        dist_LB = min_dist(self, i_node, pt)
-        dist_UB = max_dist(self, i_node, pt)
+        cdef DTYPE_t dist_pt, dist_LB = 0, dist_UB = 0
+        min_max_dist(self, i_node, pt, &dist_LB, &dist_UB)
 
         #------------------------------------------------------------
         # Case 1: all node points are outside distance r.
@@ -2368,7 +2371,9 @@ cdef class BinaryTree:
         cdef DTYPE_t knorm = kernel_norm(h, kernel)
 
         cdef NodeData_t node_info
-        cdef DTYPE_t dist_pt, dens_contribution, dist_LB_1, dist_LB_2
+        cdef DTYPE_t dist_pt, dens_contribution
+        cdef DTYPE_t dist_LB_1 = 0, dist_LB_2 = 0
+        cdef DTYPE_t dist_UB_1 = 0, dist_UB_2 = 0
 
         cdef DTYPE_t dist_UB, dist_LB
 
@@ -2425,16 +2430,14 @@ cdef class BinaryTree:
                 N1 = node_data[i1].idx_end - node_data[i1].idx_start
                 N2 = node_data[i2].idx_end - node_data[i2].idx_start
 
-                dist_LB_1 = min_dist(self, i1, pt)
-                dist_LB_2 = min_dist(self, i2, pt)
+                min_max_dist(self, i1, pt, &dist_LB_1, &dist_UB_1)
+                min_max_dist(self, i2, pt, &dist_LB_2, &dist_UB_2)
 
                 node_max_bounds[i1] = N1 * compute_kernel(dist_LB_1, h, kernel)
-                node_min_bounds[i1] = N1 * compute_kernel(
-                                            max_dist(self, i1, pt), h, kernel)
+                node_min_bounds[i1] = N1 * compute_kernel(dist_UB_1, h, kernel)
 
                 node_max_bounds[i2] = N2 * compute_kernel(dist_LB_2, h, kernel)
-                node_min_bounds[i2] = N2 * compute_kernel(
-                                            max_dist(self, i2, pt), h, kernel)
+                node_min_bounds[i2] = N2 * compute_kernel(dist_UB_2, h, kernel)
             
                 global_min_bound += (node_min_bounds[i1] + node_min_bounds[i2]
                                      - node_min_bounds[i_node])
@@ -2470,8 +2473,8 @@ cdef class BinaryTree:
         cdef NodeData_t node_info = self.node_data[i_node]
         cdef DTYPE_t dist_pt, dens_contribution
 
-        cdef DTYPE_t child1_min_bound, child2_min_bound, dist_UB
-        cdef DTYPE_t child1_max_bound, child2_max_bound, dist_LB
+        cdef DTYPE_t child1_min_bound, child2_min_bound, dist_UB = 0
+        cdef DTYPE_t child1_max_bound, child2_max_bound, dist_LB = 0
 
         N1 = node_info.idx_end - node_info.idx_start
         N2 = self.data.shape[0]
@@ -2511,14 +2514,13 @@ cdef class BinaryTree:
             N2 = self.node_data[i2].idx_end - self.node_data[i2].idx_start
             
             # XXX: for efficiency, compute min & max bounds at the same time
-            child1_min_bound = N1 * compute_kernel(max_dist(self, i1, pt),
-                                                   h, kernel)
-            child1_max_bound = N1 * compute_kernel(min_dist(self, i1, pt),
-                                                   h, kernel)
-            child2_min_bound = N2 * compute_kernel(max_dist(self, i2, pt),
-                                                   h, kernel)
-            child2_max_bound = N2 * compute_kernel(min_dist(self, i2, pt),
-                                                   h, kernel)
+            min_max_dist(self, i1, pt, &dist_LB, &dist_UB)
+            child1_min_bound = N1 * compute_kernel(dist_UB, h, kernel)
+            child1_max_bound = N1 * compute_kernel(dist_LB, h, kernel)
+
+            min_max_dist(self, i2, pt, &dist_LB, &dist_UB)
+            child2_min_bound = N2 * compute_kernel(dist_UB, h, kernel)
+            child2_max_bound = N2 * compute_kernel(dist_LB, h, kernel)
             
             global_min_bound[0] += (child1_min_bound + child2_min_bound
                                     - local_min_bound)

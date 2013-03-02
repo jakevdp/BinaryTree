@@ -70,6 +70,28 @@ cdef DTYPE_t max_rdist(BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
 cdef DTYPE_t max_dist(BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
     return pow(max_rdist(bt, i_node, pt), 1. / bt.dm.p)
 
+cdef inline void min_max_dist(BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt,
+                              DTYPE_t* min_dist, DTYPE_t* max_dist):
+    cdef ITYPE_t n_features = bt.data.shape[1]
+
+    cdef DTYPE_t d, d_lo, d_hi
+    cdef ITYPE_t j
+
+    min_dist[0] = 0.0
+    max_dist[0] = 0.0
+
+    # as above, use the fact that x + abs(x) = 2 * max(x, 0)
+    for j in range(n_features):
+        d_lo = bt.node_bounds[0, i_node, j] - pt[j]
+        d_hi = pt[j] - bt.node_bounds[1, i_node, j]
+        d = (d_lo + fabs(d_lo)) + (d_hi + fabs(d_hi))
+        min_dist[0] += pow(0.5 * d, bt.dm.p)
+        max_dist[0] += pow(fmax(fabs(d_lo), fabs(d_hi)), bt.dm.p)
+
+    min_dist[0] = pow(min_dist[0], 1. / bt.dm.p)
+    max_dist[0] = pow(max_dist[0], 1. / bt.dm.p)
+
+
 cdef inline DTYPE_t min_rdist_dual(BinaryTree bt, ITYPE_t i_node1,
                                    BinaryTree bt2, ITYPE_t i_node2):
     cdef ITYPE_t n_features = bt.data.shape[1]

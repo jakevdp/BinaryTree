@@ -29,7 +29,7 @@ def bench_trees(N=2000, D=3, leaf_size=40):
 
         construct_time = time_func(tree_type, X, leaf_size=leaf_size)
         knn_time = time_func(tree.query, X, k=5)
-        rnn_time = time_func(tree.query_radius, X, r=0.1)
+        rnn_time = time_func(tree.query_radius, X, r=0.1, count_only=True)
 
         if not label.startswith('sk'):
             kde_time = time_func(tree.kernel_density, X,
