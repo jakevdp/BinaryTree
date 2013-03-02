@@ -94,6 +94,14 @@ from libc.math cimport fmax, fmin, fabs, sqrt, exp, cos, pow
 import numpy as np
 import warnings
 
+from typedefs cimport DTYPE_t, ITYPE_t, DITYPE_t
+from typedefs import DTYPE, ITYPE
+
+# some handy constants
+cdef DTYPE_t INF = np.inf
+cdef DTYPE_t PI = np.pi
+cdef DTYPE_t ROOT_2PI = sqrt(2 * PI)
+
 ######################################################################
 # Define doc strings, substituting the appropriate class name using
 # the DOC_DICT variable defined in the pyx files.
@@ -194,36 +202,6 @@ Compute a two-point auto-correlation function
     array([ 30,  62, 278, 580, 820])
 
 """.format(**DOC_DICT)
-
-
-######################################################################
-# Define types
-
-# Floating point/data type
-ctypedef np.float64_t DTYPE_t
-
-# Index/integer type.
-#  WARNING: ITYPE_t must be a signed integer type or you will have a bad time!
-ctypedef np.intp_t ITYPE_t
-
-# Fused type for certain operations
-ctypedef fused DITYPE_t:
-    ITYPE_t
-    DTYPE_t
-
-# use a hack to determine the associated numpy data types
-cdef ITYPE_t idummy
-cdef ITYPE_t[:] idummy_view = <ITYPE_t[:1]> &idummy
-ITYPE = np.asarray(idummy_view).dtype
-
-cdef DTYPE_t ddummy
-cdef DTYPE_t[:] ddummy_view = <DTYPE_t[:1]> &ddummy
-DTYPE = np.asarray(ddummy_view).dtype
-
-# some handy constants
-cdef DTYPE_t INF = np.inf
-cdef DTYPE_t PI = np.pi
-cdef DTYPE_t ROOT_2PI = sqrt(2 * PI)
 
 
 ######################################################################
