@@ -9,7 +9,7 @@ from distutils.core import setup
 from distutils.extension import Extension
 from Cython.Distutils import build_ext
 
-for extension in ['ball_tree', 'kd_tree', 'typedefs']:
+for extension in ['ball_tree', 'kd_tree', 'typedefs', 'dist_metrics']:
     setup(cmdclass = {'build_ext': build_ext},
           name=extension,
           version='1.0',

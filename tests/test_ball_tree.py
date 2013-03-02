@@ -1,6 +1,7 @@
 import numpy as np
 from numpy.testing import assert_allclose
-from ball_tree import BallTree, DistanceMetric
+from ball_tree import BallTree
+from dist_metrics import DistanceMetric
 
 V = np.random.random((3, 3))
 V = np.dot(V, V.T)

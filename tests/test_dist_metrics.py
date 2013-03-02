@@ -4,7 +4,7 @@ import numpy as np
 from numpy.testing import assert_allclose
 
 from scipy.spatial.distance import cdist, pdist, squareform
-from ball_tree import DistanceMetric
+from dist_metrics import DistanceMetric
 
 
 class TestMetrics:
