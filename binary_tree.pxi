@@ -183,6 +183,16 @@ Compute a gaussian kernel density estimate:
     >>> tree.kernel_density(X[:3], h=0.1, kernel='gaussian')
     array([ 6.94114649,  7.83281226,  7.2071716 ])
 
+Compute a two-point auto-correlation function
+
+    >>> import numpy as np
+    >>> np.random.seed(0)
+    >>> X = np.random.random((30, 3))
+    >>> r = np.linspace(0, 1, 5)
+    >>> tree = BinaryTree(X)                  # doctest: +SKIP
+    >>> tree.two_point_correlation(X, r)
+    array([ 30,  62, 278, 580, 820])
+
 """.format(**DOC_DICT)
 
 
@@ -1771,13 +1781,13 @@ cdef class BinaryTree:
             pt = &Xarr[0, 0]
             if breadth_first:
                 for i in range(Xarr.shape[0]):
-                    self._query_one_breadthfirst(pt, i, heap, nodeheap)
+                    self._query_single_breadthfirst(pt, i, heap, nodeheap)
                     pt += Xarr.shape[1]
             else:
                 for i in range(Xarr.shape[0]):
                     reduced_dist_LB = min_rdist(self, 0, pt)
-                    self._query_one_depthfirst(0, pt, i, heap,
-                                               reduced_dist_LB)
+                    self._query_single_depthfirst(0, pt, i, heap,
+                                                  reduced_dist_LB)
                     pt += Xarr.shape[1]
 
         distances, indices = heap.get_arrays(sort=True)
@@ -1906,11 +1916,11 @@ cdef class BinaryTree:
 
         pt = &Xarr[0, 0]
         for i in range(Xarr.shape[0]):
-            count_arr[i] = self._query_radius_one(0, pt, rarr[i],
-                                                  &idx_arr_i[0],
-                                                  &dist_arr_i[0],
-                                                  0, count_only,
-                                                  return_distance)
+            count_arr[i] = self._query_radius_single(0, pt, rarr[i],
+                                                     &idx_arr_i[0],
+                                                     &dist_arr_i[0],
+                                                     0, count_only,
+                                                     return_distance)
             pt += n_features
 
             if count_only:
@@ -1984,7 +1994,7 @@ cdef class BinaryTree:
         >>> import numpy as np
         >>> np.random.seed(1)
         >>> X = np.random.random((100, 3))
-        >>> tree = BinaryTree(X)
+        >>> tree = BinaryTree(X)           # doctest: +SKIP
         >>> tree.kernel_density(X[:3], h=0.1, kernel='gaussian')
         array([ 6.94114649,  7.83281226,  7.2071716 ])
         """
@@ -2052,11 +2062,12 @@ cdef class BinaryTree:
                 node_min_bounds = np.zeros(self.n_nodes)
                 node_max_bounds = np.zeros(self.n_nodes)
                 for i in range(Xarr.shape[0]):
-                    density[i] = self._kde_one_breadthfirst(pt, kernel_c,
-                                                            h_c, atol_c,
-                                                            rtol_c, nodeheap,
-                                                            &node_min_bounds[0],
-                                                            &node_max_bounds[0])
+                    density[i] = self._kde_single_breadthfirst(
+                                            pt, kernel_c,
+                                            h_c, atol_c,
+                                            rtol_c, nodeheap,
+                                            &node_min_bounds[0],
+                                            &node_max_bounds[0])
                     pt += n_features
             else:
                 for i in range(Xarr.shape[0]):
@@ -2066,10 +2077,10 @@ cdef class BinaryTree:
                                                            h_c, kernel_c)
                     max_bound = n_samples * compute_kernel(dist_LB,
                                                            h_c, kernel_c)
-                    self._kde_one_depthfirst(0, pt, kernel_c, h_c,
-                                             atol_c, rtol_c,
-                                             min_bound, max_bound,
-                                             &min_bound, &max_bound)
+                    self._kde_single_depthfirst(0, pt, kernel_c, h_c,
+                                                atol_c, rtol_c,
+                                                min_bound, max_bound,
+                                                &min_bound, &max_bound)
                     density[i] = 0.5 * (min_bound + max_bound)
                     pt += n_features
 
@@ -2080,10 +2091,81 @@ cdef class BinaryTree:
 
         return np.asarray(density).reshape(X.shape[:-1])
 
-    cdef void _query_one_depthfirst(BinaryTree self, ITYPE_t i_node,
-                                    DTYPE_t* pt, ITYPE_t i_pt,
-                                    NeighborsHeap heap,
-                                    DTYPE_t reduced_dist_LB):
+    def two_point_correlation(self, X, r, dualtree=False):
+        """Compute the two-point correlation function
+
+        Parameters
+        ----------
+        X : array_like
+            An array of points to query.  Last dimension should match dimension
+            of training data.
+        r : array_like
+            A one-dimensional array of distances
+        dualtree : boolean (default = False)
+            If true, use a dualtree algorithm.  Otherwise, use a single-tree
+            algorithm.  Dual tree algorithms can have better scaling for
+            large N.
+
+        Returns
+        -------
+        counts : ndarray
+            counts[i] contains the number of pairs of points with distance
+            less than or equal to r[i]
+
+        Examples
+        --------
+        Compute the two-point autocorrelation function of X:
+
+        >>> import numpy as np
+        >>> np.random.seed(0)
+        >>> X = np.random.random((30, 3))
+        >>> r = np.linspace(0, 1, 5)
+        >>> tree = BinaryTree(X)     # doctest: +SKIP
+        >>> tree.two_point_correlation(X, r)
+        array([ 30,  62, 278, 580, 820])
+        """
+        cdef ITYPE_t n_features = self.data.shape[1]
+
+        # validate X and prepare for query
+        X = np.atleast_2d(np.asarray(X, dtype=DTYPE, order='C'))
+
+        if X.shape[-1] != self.data.shape[1]:
+            raise ValueError("query data dimension must "
+                             "match training data dimension")
+
+        cdef DTYPE_t[:, ::1] Xarr = X.reshape((-1, self.data.shape[1]))
+
+        # prepare r for query
+        r = np.asarray(r, dtype=DTYPE, order='C')
+        r = np.atleast_1d(r).astype(DTYPE)
+        if r.ndim != 1:
+            raise ValueError("r must be a 1-dimensional array")
+        i_rsort = np.argsort(r)
+        cdef DTYPE_t[::1] rarr = r[i_rsort]
+
+        # create array to hold counts
+        count = np.zeros(r.shape[0], dtype=ITYPE)
+        cdef ITYPE_t[::1] carr = count
+
+        cdef DTYPE_t* pt = &Xarr[0, 0]
+
+        if dualtree:
+            other = self.__class__(Xarr, metric=self.dm,
+                                   leaf_size=self.leaf_size)
+            self._two_point_dual(0, other, 0, &rarr[0], &carr[0],
+                                 0, rarr.shape[0])
+        else:
+            for i in range(Xarr.shape[0]):
+                self._two_point_single(0, pt, &rarr[0], &carr[0],
+                                       0, rarr.shape[0])
+                pt += n_features
+    
+        return count
+
+    cdef void _query_single_depthfirst(BinaryTree self, ITYPE_t i_node,
+                                       DTYPE_t* pt, ITYPE_t i_pt,
+                                       NeighborsHeap heap,
+                                       DTYPE_t reduced_dist_LB):
         cdef NodeData_t node_info = self.node_data[i_node]
 
         cdef DTYPE_t dist_pt, reduced_dist_LB_1, reduced_dist_LB_2
@@ -2120,20 +2202,20 @@ cdef class BinaryTree:
 
             # recursively query subnodes
             if reduced_dist_LB_1 <= reduced_dist_LB_2:
-                self._query_one_depthfirst(i1, pt, i_pt, heap,
-                                           reduced_dist_LB_1)
-                self._query_one_depthfirst(i2, pt, i_pt, heap,
-                                           reduced_dist_LB_2)
+                self._query_single_depthfirst(i1, pt, i_pt, heap,
+                                              reduced_dist_LB_1)
+                self._query_single_depthfirst(i2, pt, i_pt, heap,
+                                              reduced_dist_LB_2)
             else:
-                self._query_one_depthfirst(i2, pt, i_pt, heap,
-                                           reduced_dist_LB_2)
-                self._query_one_depthfirst(i1, pt, i_pt, heap,
-                                           reduced_dist_LB_1)
+                self._query_single_depthfirst(i2, pt, i_pt, heap,
+                                              reduced_dist_LB_2)
+                self._query_single_depthfirst(i1, pt, i_pt, heap,
+                                              reduced_dist_LB_1)
 
-    cdef void _query_one_breadthfirst(BinaryTree self, DTYPE_t* pt,
-                                      ITYPE_t i_pt,
-                                      NeighborsHeap heap,
-                                      NodeHeap nodeheap):
+    cdef void _query_single_breadthfirst(BinaryTree self, DTYPE_t* pt,
+                                         ITYPE_t i_pt,
+                                         NeighborsHeap heap,
+                                         NodeHeap nodeheap):
         cdef ITYPE_t i, i_node
         cdef DTYPE_t dist_pt, reduced_dist_LB
         cdef NodeData_t* node_data = &self.node_data[0]
@@ -2409,14 +2491,14 @@ cdef class BinaryTree:
                         nodeheap_item.val = min_rdist_dual(self, i1, other, i2)
                         nodeheap.push(nodeheap_item)
 
-    cdef ITYPE_t _query_radius_one(BinaryTree self,
-                                   ITYPE_t i_node,
-                                   DTYPE_t* pt, DTYPE_t r,
-                                   ITYPE_t* indices,
-                                   DTYPE_t* distances,
-                                   ITYPE_t count,
-                                   int count_only,
-                                   int return_distance):
+    cdef ITYPE_t _query_radius_single(BinaryTree self,
+                                      ITYPE_t i_node,
+                                      DTYPE_t* pt, DTYPE_t r,
+                                      ITYPE_t* indices,
+                                      DTYPE_t* distances,
+                                      ITYPE_t count,
+                                      int count_only,
+                                      int return_distance):
         cdef DTYPE_t* data = &self.data[0, 0]
         cdef ITYPE_t* idx_array = &self.idx_array[0]
         cdef ITYPE_t n_features = self.data.shape[1]
@@ -2476,21 +2558,21 @@ cdef class BinaryTree:
         #------------------------------------------------------------
         # Case 4: Node is not a leaf.  Recursively query subnodes
         else:
-            count = self._query_radius_one(2 * i_node + 1, pt, r,
-                                           indices, distances, count,
-                                           count_only, return_distance)
-            count = self._query_radius_one(2 * i_node + 2, pt, r,
-                                           indices, distances, count,
-                                           count_only, return_distance)
+            count = self._query_radius_single(2 * i_node + 1, pt, r,
+                                              indices, distances, count,
+                                              count_only, return_distance)
+            count = self._query_radius_single(2 * i_node + 2, pt, r,
+                                              indices, distances, count,
+                                              count_only, return_distance)
 
         return count
 
-    cdef DTYPE_t _kde_one_breadthfirst(self, DTYPE_t* pt,
-                                       KernelType kernel, DTYPE_t h,
-                                       DTYPE_t atol, DTYPE_t rtol,
-                                       NodeHeap nodeheap,
-                                       DTYPE_t* node_min_bounds,
-                                       DTYPE_t* node_max_bounds):
+    cdef DTYPE_t _kde_single_breadthfirst(self, DTYPE_t* pt,
+                                          KernelType kernel, DTYPE_t h,
+                                          DTYPE_t atol, DTYPE_t rtol,
+                                          NodeHeap nodeheap,
+                                          DTYPE_t* node_min_bounds,
+                                          DTYPE_t* node_max_bounds):
         cdef ITYPE_t i, i1, i2, N1, N2, i_node
         cdef DTYPE_t global_min_bound, global_max_bound
 
@@ -2587,13 +2669,13 @@ cdef class BinaryTree:
         return 0.5 * (global_max_bound + global_min_bound)
 
 
-    cdef void _kde_one_depthfirst(self, ITYPE_t i_node, DTYPE_t* pt,
-                                  KernelType kernel, DTYPE_t h,
-                                  DTYPE_t atol, DTYPE_t rtol,
-                                  DTYPE_t local_min_bound,
-                                  DTYPE_t local_max_bound,
-                                  DTYPE_t* global_min_bound,
-                                  DTYPE_t* global_max_bound):
+    cdef void _kde_single_depthfirst(self, ITYPE_t i_node, DTYPE_t* pt,
+                                     KernelType kernel, DTYPE_t h,
+                                     DTYPE_t atol, DTYPE_t rtol,
+                                     DTYPE_t local_min_bound,
+                                     DTYPE_t local_max_bound,
+                                     DTYPE_t* global_min_bound,
+                                     DTYPE_t* global_max_bound):
         cdef ITYPE_t i, i1, i2, N1, N2
 
         cdef DTYPE_t* data = &self.data[0, 0]
@@ -2658,14 +2740,14 @@ cdef class BinaryTree:
             global_max_bound[0] += (child1_max_bound + child2_max_bound
                                     - local_max_bound)
 
-            self._kde_one_depthfirst(i1, pt, kernel, h,
-                                     atol, rtol,
-                                     child1_min_bound, child1_max_bound,
-                                     global_min_bound, global_max_bound)
-            self._kde_one_depthfirst(i2, pt, kernel, h,
-                                     atol, rtol,
-                                     child2_min_bound, child2_max_bound,
-                                     global_min_bound, global_max_bound)
+            self._kde_single_depthfirst(i1, pt, kernel, h,
+                                        atol, rtol,
+                                        child1_min_bound, child1_max_bound,
+                                        global_min_bound, global_max_bound)
+            self._kde_single_depthfirst(i2, pt, kernel, h,
+                                        atol, rtol,
+                                        child2_min_bound, child2_max_bound,
+                                        global_min_bound, global_max_bound)
 
 
     cdef void _kde_dual_breadthfirst(BinaryTree self, BinaryTree other,
@@ -2823,7 +2905,121 @@ cdef class BinaryTree:
                     self._kde_dual_depthfirst(i1, other, i2, kernel,
                                               h, atol, density)
 
+    cdef void _two_point_single(self, ITYPE_t i_node, DTYPE_t* pt, DTYPE_t* r,
+                                ITYPE_t* count, ITYPE_t i_min, ITYPE_t i_max):
+        cdef DTYPE_t* data = &self.data[0, 0]
+        cdef ITYPE_t* idx_array = &self.idx_array[0]
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef NodeData_t node_info = self.node_data[i_node]
 
+        cdef ITYPE_t i, j, Npts
+        cdef DTYPE_t reduced_r
+
+        cdef DTYPE_t dist_pt, dist_LB = 0, dist_UB = 0
+        min_max_dist(self, i_node, pt, &dist_LB, &dist_UB)
+
+        #------------------------------------------------------------
+        # Go through bounds and check for cuts
+        while i_min < i_max:
+            if dist_LB > r[i_min]:
+                i_min += 1
+            else:
+                break
+
+        while i_max > i_min:
+            Npts = (node_info.idx_end - node_info.idx_start)
+            if dist_UB <= r[i_max - 1]:
+                count[i_max - 1] += Npts
+                i_max -= 1
+            else:
+                break
+
+        if i_min < i_max:
+            # If node is a leaf, go through all points
+            if node_info.is_leaf:
+                for i in range(node_info.idx_start, node_info.idx_end):
+                    dist_pt = self.dist(pt, (data + n_features * idx_array[i]),
+                                        n_features)
+                    j = i_max - 1
+                    while (j >= i_min) and (dist_pt <= r[j]):
+                        count[j] += 1
+                        j -= 1
+
+            else:
+                self._two_point_single(2 * i_node + 1, pt, r,
+                                       count, i_min, i_max)
+                self._two_point_single(2 * i_node + 2, pt, r,
+                                       count, i_min, i_max)
+
+    cdef void _two_point_dual(self, ITYPE_t i_node1,
+                              BinaryTree other, ITYPE_t i_node2,
+                              DTYPE_t* r, ITYPE_t* count,
+                              ITYPE_t i_min, ITYPE_t i_max):
+        cdef DTYPE_t* data1 = &self.data[0, 0]
+        cdef DTYPE_t* data2 = &other.data[0, 0]
+        cdef ITYPE_t* idx_array1 = &self.idx_array[0]
+        cdef ITYPE_t* idx_array2 = &other.idx_array[0]
+        cdef NodeData_t node_info1 = self.node_data[i_node1]
+        cdef NodeData_t node_info2 = other.node_data[i_node2]
+
+        cdef ITYPE_t n_features = self.data.shape[1]
+
+        cdef ITYPE_t i1, i2, j, Npts
+        cdef DTYPE_t reduced_r
+
+        cdef DTYPE_t dist_pt, dist_LB = 0, dist_UB = 0
+        dist_LB = min_dist_dual(self, i_node1, other, i_node2)
+        dist_UB = max_dist_dual(self, i_node1, other, i_node2)
+
+        #------------------------------------------------------------
+        # Go through bounds and check for cuts
+        while i_min < i_max:
+            if dist_LB > r[i_min]:
+                i_min += 1
+            else:
+                break
+
+        while i_max > i_min:
+            Npts = ((node_info1.idx_end - node_info1.idx_start)
+                    * (node_info2.idx_end - node_info2.idx_start))
+            if dist_UB <= r[i_max - 1]:
+                count[i_max - 1] += Npts
+                i_max -= 1
+            else:
+                break
+
+        if i_min < i_max:
+            if node_info1.is_leaf and node_info2.is_leaf:
+                # If both nodes are leaves, go through all points
+                for i1 in range(node_info1.idx_start, node_info1.idx_end):
+                    for i2 in range(node_info2.idx_start, node_info2.idx_end):
+                        dist_pt = self.dist((data1 + n_features
+                                             * idx_array1[i1]),
+                                            (data2 + n_features
+                                             * idx_array2[i2]),
+                                            n_features)
+                        j = i_max - 1
+                        while (j >= i_min) and (dist_pt <= r[j]):
+                            count[j] += 1
+                            j -= 1
+
+            elif node_info1.is_leaf:
+                # If only one is a leaf, split the other
+                for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
+                    self._two_point_dual(i_node1, other, i2,
+                                         r, count, i_min, i_max)
+
+            elif node_info2.is_leaf:
+                for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
+                    self._two_point_dual(i1, other, i_node2,
+                                         r, count, i_min, i_max)
+
+            else:
+                 # neither is a leaf: split & query both
+                for i1 in range(2 * i_node1 + 1, 2 * i_node1 + 3):
+                    for i2 in range(2 * i_node2 + 1, 2 * i_node2 + 3):
+                        self._two_point_dual(i1, other, i2,
+                                             r, count, i_min, i_max)
 
 
 ######################################################################

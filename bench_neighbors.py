@@ -21,31 +21,36 @@ def bench_trees(N=2000, D=3, leaf_size=40):
     labels = ['skBallTree', 'BallTree', 'KDTree']
     tree_types = [skBallTree, BallTree, KDTree]
 
-    print '%s %s %s %s %s' % tuple(map(lambda s: s.ljust(15),
-                                       ('', 'Construction',
-                                        'KNN', 'RNN', 'KDE')))
+    spacing = 11
+
+    print '%s %s %s %s %s %s' % tuple(map(lambda s: s.ljust(spacing),
+                                          ('', 'Build',
+                                           'KNN', 'RNN', 'KDE', '2PT')))
     for tree_type, label in zip(tree_types, labels):
         tree = tree_type(X, leaf_size=leaf_size)
 
         construct_time = time_func(tree_type, X, leaf_size=leaf_size)
-        knn_time = time_func(tree.query, X, k=5)
-        rnn_time = time_func(tree.query_radius, X, r=0.1, count_only=True)
+        knn_time = time_func(tree.query, X, k=3)
+        rnn_time = time_func(tree.query_radius, X, r=0.1)
 
         if not label.startswith('sk'):
             kde_time = time_func(tree.kernel_density, X,
                                  h=0.01, rtol=0.001, atol=0.001)
-            print '%s %s %s %s %s' % tuple(map(lambda s: s.ljust(15),
-                                               (label,
-                                                '%.2g' % construct_time,
-                                                '%.2g' % knn_time,
-                                                '%.2g' % rnn_time,
-                                                '%.2g' % kde_time)))
+            twopt_time = time_func(tree.two_point_correlation, X,
+                                   r = np.linspace(0, 1, 100))
+            print '%s %s %s %s %s %s' % tuple(map(lambda s: s.ljust(spacing),
+                                                  (label,
+                                                   '%.2g' % construct_time,
+                                                   '%.2g' % knn_time,
+                                                   '%.2g' % rnn_time,
+                                                   '%.2g' % kde_time,
+                                                   '%.2g' % twopt_time)))
         else:
-            print '%s %s %s %s' % tuple(map(lambda s: s.ljust(15),
+            print '%s %s %s %s' % tuple(map(lambda s: s.ljust(spacing),
                                             (label,
                                              '%.2g' % construct_time,
                                              '%.2g' % knn_time,
                                              '%.2g' % rnn_time)))
 
 if __name__ == '__main__':
-    bench_trees()
+    bench_trees(2000)

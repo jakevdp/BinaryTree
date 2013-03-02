@@ -129,6 +129,24 @@ def test_kd_tree_KDE(n_samples=100, n_features=3):
                                    dualtree, breadth_first)
 
 
+def test_kd_tree_two_point(n_samples=100, n_features=3):
+    np.random.seed(0)
+    X = np.random.random((n_samples, n_features))
+    Y = np.random.random((n_samples, n_features))
+    r = np.linspace(0, 1, 10)
+    kdt = KDTree(X, leaf_size=10)
+
+    D = DistanceMetric.get_metric("euclidean").pairwise(Y, X)
+    counts_true = [(D <= ri).sum() for ri in r]
+
+    def check_two_point(r, dualtree):
+        counts = kdt.two_point_correlation(Y, r=r, dualtree=dualtree)
+        assert_allclose(counts, counts_true)
+
+    for dualtree in (True, False):
+        yield check_two_point, r, dualtree
+
+
 def test_kd_tree_pickle():
     import pickle
     np.random.seed(0)
